@@ -1,28 +1,39 @@
 """The main window: live render on top, dark settings underneath."""
-from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QIcon, QImage
+from ctypes import wintypes
+
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QCursor, QIcon, QImage
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPlainTextEdit,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
-from .controls import Grip, Segmented
+from .controls import Grip, Scale, Segmented, Swatch, Toggle
 from .engines import ENGINES, RenderParams
 from .region import RegionFrame, RegionPicker
-from .screen import exclude_from_capture, style_native_window, to_physical
+from .screen import (
+    HTMAXBUTTON,
+    WM_NCCALCSIZE,
+    WM_NCHITTEST,
+    WM_NCLBUTTONDOWN,
+    WM_NCLBUTTONUP,
+    enable_native_frame,
+    exclude_from_capture,
+    maximised_inset,
+    style_native_window,
+    to_physical,
+)
 from .stage import Stage
 from .theme import ASSETS, GRAY_500, LIME, ORANGE, STYLE_SHEET, load_fonts
 from .worker import RenderWorker
 
-STYLES = ["Product render", "Clay model", "Marker sketch", "Studio photo"]
+STYLES = [("Product", "Product render"), ("Clay", "Clay model"), ("Marker", "Marker sketch"), ("Studio", "Studio photo")]
 GRIP = 6
 CORNER = 14
 
@@ -42,7 +53,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(STYLE_SHEET)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
-        self.setMinimumSize(QSize(920, 640))
+        self.setMinimumSize(QSize(640, 560))  # small enough for a one-third snap tile
         self.resize(QSize(1040, 800))
 
         self.worker = None
@@ -57,6 +68,7 @@ class MainWindow(QMainWindow):
         self.engine_box.currentIndexChanged.connect(self._engine_changed)
         self.preview = Stage(self.engine_box)
         self.preview.minimise_clicked.connect(self.showMinimized)
+        self.preview.maximise_clicked.connect(self._toggle_maximised)
         self.preview.close_clicked.connect(self.close)
         self.preview.resized.connect(self._place_seam)
 
@@ -71,6 +83,9 @@ class MainWindow(QMainWindow):
         self.seam = self._build_seam(root)
         self._grips = self._build_grips(root)
         self._engine_changed()
+        self._hover_check = QTimer(self)
+        self._hover_check.setInterval(80)
+        self._hover_check.timeout.connect(self._check_maximise_hover)
 
     def _build_seam(self, parent) -> QFrame:
         seam = QFrame(parent)
@@ -95,70 +110,66 @@ class MainWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("settings")
         column = QVBoxLayout(panel)
-        column.setContentsMargins(16, 38, 16, 12)
-        column.setSpacing(10)
+        column.setContentsMargins(24, 40, 24, 14)
+        column.setSpacing(14)
 
         self.prompt_box = QPlainTextEdit()
-        self.prompt_box.setPlaceholderText("Describe the render, e.g. modern coffee machine, studio light")
-        self.prompt_box.setFixedHeight(92)
+        self.prompt_box.setPlaceholderText("modern coffee machine, studio light")
+        self.prompt_box.document().setDocumentMargin(0)
         self.prompt_box.textChanged.connect(self._params_changed)
         self.engine_note = label("", "note")
         self.engine_note.setWordWrap(True)
-        prompt_card = QFrame()
-        prompt_card.setObjectName("card")
-        prompt_column = QVBoxLayout(prompt_card)
-        prompt_column.setContentsMargins(14, 12, 14, 12)
-        prompt_column.setSpacing(8)
-        prompt_column.addWidget(label("Prompt", "heading"))
-        prompt_column.addWidget(self.prompt_box)
-        prompt_column.addWidget(self.engine_note)
-        prompt_column.addStretch()
+        describe = QVBoxLayout()
+        describe.setSpacing(8)
+        describe.addWidget(label("Describe it", "heading"))
+        describe.addWidget(self.prompt_box, 1)
+        describe.addWidget(self.engine_note)
 
-        self.style_box = Segmented("style", [(style, style) for style in STYLES], spacing=6)
+        self.style_box = Segmented("style", STYLES, spacing=8, make=Swatch)
         self.style_box.currentIndexChanged.connect(self._params_changed)
         self.follow_value = label("", "value")
-        self.follow_slider = QSlider(Qt.Orientation.Horizontal)
+        self.follow_slider = Scale()
         self.follow_slider.setRange(0, 100)
         self.follow_slider.setValue(33)
         self.follow_slider.valueChanged.connect(self._params_changed)
         follow_title = QHBoxLayout()
-        follow_title.addWidget(label("Follow my drawing", "heading"))
+        follow_title.addWidget(label("Follow my drawing", "heading"), 0, Qt.AlignmentFlag.AlignBottom)
         follow_title.addStretch()
         follow_title.addWidget(self.follow_value)
         ends = QHBoxLayout()
         ends.addWidget(label("Loose", "note"))
         ends.addStretch()
         ends.addWidget(label("Strict", "note"))
-        controls_card = QFrame()
-        controls_card.setObjectName("card")
-        controls_column = QVBoxLayout(controls_card)
-        controls_column.setContentsMargins(14, 12, 14, 12)
-        controls_column.setSpacing(8)
-        controls_column.addWidget(label("Style", "heading"))
-        controls_column.addWidget(self.style_box)
-        controls_column.addSpacing(6)
-        controls_column.addLayout(follow_title)
-        controls_column.addWidget(self.follow_slider)
-        controls_column.addLayout(ends)
-        controls_column.addStretch()
+        tune = QVBoxLayout()
+        tune.setSpacing(6)
+        tune.addWidget(self.style_box, 0, Qt.AlignmentFlag.AlignLeft)
+        tune.addSpacing(4)
+        tune.addLayout(follow_title)
+        tune.addWidget(self.follow_slider)
+        tune.addLayout(ends)
+        tune.addStretch()
 
-        cards = QHBoxLayout()
-        cards.setSpacing(12)
-        cards.addWidget(prompt_card, 1)
-        cards.addWidget(controls_card, 1)
-        column.addLayout(cards)
+        rule = QFrame()
+        rule.setObjectName("rule")
+        rule.setFixedWidth(1)
+        columns = QHBoxLayout()
+        columns.setSpacing(24)
+        columns.addLayout(describe, 1)
+        columns.addWidget(rule)
+        columns.addLayout(tune)
+        column.addLayout(columns)
 
-        self.on_top = QCheckBox("Keep on top")
+        self.on_top = Toggle("Keep on top")
         self.on_top.setChecked(True)
         self.on_top.toggled.connect(self._set_on_top)
-        self.hide_capture = QCheckBox("Hide from capture")
+        self.hide_capture = Toggle("Hide from capture")
         self.hide_capture.setChecked(True)
         self.hide_capture.setToolTip(
             "On: this window stays out of renders, screenshots, recordings and screen sharing.\n"
             "Off: it can be shared, but keep it clear of the region or it will render itself."
         )
         self.hide_capture.toggled.connect(self._set_capture_hidden)
-        self.status = label("Ready", "status")
+        self.status = label("Nothing selected yet", "status")
         self.status.setWordWrap(True)
         self.status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         footer = QHBoxLayout()
@@ -167,7 +178,7 @@ class MainWindow(QMainWindow):
         footer.addWidget(self.hide_capture)
         footer.addWidget(self.status, 1)
         column.addLayout(footer)
-        self.follow_value.setText(f"{self.follow_slider.value()}%")
+        self.follow_value.setText(str(self.follow_slider.value()))
         return panel
 
     def _build_grips(self, parent) -> dict:
@@ -207,13 +218,66 @@ class MainWindow(QMainWindow):
             grip.raise_()
 
     def showEvent(self, event):
+        enable_native_frame(self)
         style_native_window(self)
         exclude_from_capture(self, self.hide_capture.isChecked())
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.WindowStateChange:
+            maximised = self.isMaximized()
+            self.preview.maximise_button.set_kind("restore" if maximised else "maximise")
+            self.preview.maximise_button.setToolTip("Restore" if maximised else "Maximise")
+            for grip in self._grips.values():
+                grip.setVisible(not maximised)
+        super().changeEvent(event)
+
+    def nativeEvent(self, event_type, message):
+        if bytes(event_type) != b"windows_generic_MSG":
+            return False, 0
+        msg = wintypes.MSG.from_address(int(message))
+        if msg.message == WM_NCCALCSIZE:
+            # Claim the whole frame for drawing, which hides the title bar. A maximised
+            # window hangs off the screen edges, so pull it back in.
+            if self.isMaximized():
+                inset = maximised_inset(int(msg.hWnd))
+                rect = wintypes.RECT.from_address(msg.lParam)
+                rect.left += inset
+                rect.top += inset
+                rect.right -= inset
+                rect.bottom -= inset
+            return True, 0
+        if msg.message == WM_NCHITTEST and self._over_maximise():
+            # Windows shows its snap layouts menu for whatever answers as the maximise button.
+            self.preview.maximise_button.set_hot(True)
+            self._hover_check.start()
+            return True, HTMAXBUTTON
+        if msg.message == WM_NCLBUTTONDOWN and msg.wParam == HTMAXBUTTON:
+            return True, 0
+        if msg.message == WM_NCLBUTTONUP and msg.wParam == HTMAXBUTTON:
+            self._toggle_maximised()
+            return True, 0
+        return False, 0
+
+    def _over_maximise(self) -> bool:
+        button = self.preview.maximise_button
+        return button.isVisible() and button.rect().contains(button.mapFromGlobal(QCursor.pos()))
+
+    def _check_maximise_hover(self):
+        if not self._over_maximise():
+            self._hover_check.stop()
+            self.preview.maximise_button.set_hot(False)
+            self.preview.check_pointer()
+
+    def _toggle_maximised(self):
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
 
     def params(self) -> RenderParams:
         return RenderParams(
             prompt=self.prompt_box.toPlainText().strip(),
-            style=self.style_box.currentText(),
+            style=self.style_box.currentData(),
             follow=self.follow_slider.value() / 100.0,
         )
 
@@ -245,9 +309,9 @@ class MainWindow(QMainWindow):
         self.select_button.setText("Select region")
         self.run_button.setEnabled(False)
         self.clear_button.setEnabled(False)
-        self.preview.clear("Select a region to get started")
+        self.preview.clear()
         self.preview.live_card.hide()
-        self.status.setText("Ready")
+        self.status.setText("Nothing selected yet")
         self._place_seam()
 
     def _region_moved(self, area: QRect):
@@ -255,7 +319,7 @@ class MainWindow(QMainWindow):
             self.worker.set_region(to_physical(area))
 
     def _params_changed(self):
-        self.follow_value.setText(f"{self.follow_slider.value()}%")
+        self.follow_value.setText(str(self.follow_slider.value()))
         if self.worker:
             self.worker.set_params(self.params())
 
@@ -306,17 +370,20 @@ class MainWindow(QMainWindow):
         self.run_button.setText("Start")
         self.status.setText("Stopped")
         self.preview.set_live(False)
+        self.region_frame.set_live(False)
         self.preview.live_card.show_state("Stopped")
         self.preview.live_card.rate.setText("–")
 
     def _show_loading(self, message: str):
         self.status.setText(message)
+        self.preview.set_waiting(message)
         self.preview.live_card.show_state("Loading", ORANGE)
 
     def _show_frame(self, image: QImage, fps: float):
         card = self.preview.live_card
         self.preview.show_image(image)
         self.preview.set_live(True)
+        self.region_frame.set_live(True)
         card.show_state("Live", LIME)
         if fps:
             card.rate.setText(f"{fps:.0f} fps")
@@ -325,8 +392,9 @@ class MainWindow(QMainWindow):
 
     def _show_idle(self):
         self.preview.set_live(False)
+        self.region_frame.set_live(False)
         self.preview.live_card.show_state("Paused", GRAY_500)
-        self.status.setText("Screen unchanged, waiting")
+        self.status.setText("Paused until your screen changes")
 
     def _show_failure(self, message: str):
         self.stop()

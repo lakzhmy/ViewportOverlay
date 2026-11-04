@@ -36,22 +36,23 @@ def load_fonts() -> None:
 STYLE_SHEET = f"""
 * {{ font-family: "{FONT}", "Segoe UI"; font-size: 14px; }}
 QMainWindow, QWidget#root, QFrame#settings {{ background: {INK_900}; }}
-QFrame#card {{ background: {INK_850}; border-radius: 12px; }}
+QFrame#rule {{ background: {INK_800}; }}
 QLabel {{ color: {PAPER_50}; background: transparent; }}
 QLabel#heading {{ color: {GRAY_400}; font-size: 13px; font-weight: 600; }}
+QLabel#stageTitle {{ color: {PAPER_50}; font-size: 24px; font-weight: 600; }}
+QLabel#stageHint {{ color: {GRAY_400}; }}
 QLabel#note, QLabel#status {{ color: {GRAY_400}; font-size: 13px; }}
-QLabel#value {{ color: {GRAY_300}; font-family: "{MONO}", Consolas; font-size: 13px; }}
+QLabel#value {{ color: {PAPER_50}; font-family: "{MONO}", Consolas; font-size: 30px; }}
 QLabel#liveState {{ font-size: 13px; font-weight: 600; }}
 QLabel#liveRate {{ font-family: "{MONO}", Consolas; font-size: 20px; font-weight: 600; }}
 QLabel#liveSize {{ color: {GRAY_300}; font-family: "{MONO}", Consolas; font-size: 12px; }}
-QLabel#stageMessage {{ color: {GRAY_400}; }}
 QToolTip {{ background: {INK_800}; color: {PAPER_50}; border: 1px solid {INK_700}; padding: 4px; }}
 
 QPlainTextEdit {{
-    background: {INK_800}; color: {PAPER_50}; border: 1px solid {INK_700};
-    border-radius: 8px; padding: 6px; selection-background-color: {ORANGE}; selection-color: {INK_900};
+    background: transparent; color: {PAPER_50}; border: none; border-bottom: 1px solid {INK_700};
+    font-size: 20px; selection-background-color: {ORANGE}; selection-color: {INK_900};
 }}
-QPlainTextEdit:focus {{ border-color: {ORANGE}; }}
+QPlainTextEdit:focus {{ border-bottom-color: {ORANGE}; }}
 
 QPushButton {{ border: none; font-weight: 600; }}
 
@@ -70,21 +71,7 @@ QWidget#engine QPushButton {{
     background: transparent; color: {INK_900}; border-radius: 13px; padding: 5px 14px;
 }}
 QWidget#engine QPushButton:hover {{ background: {PAPER_100}; }}
-QWidget#engine QPushButton:checked {{ background: {ORANGE}; }}
+QWidget#engine QPushButton:checked {{ background: {INK_900}; color: {PAPER_50}; }}
 
-QWidget#style QPushButton {{
-    background: {INK_800}; color: {PAPER_50}; border-radius: 8px; padding: 7px 8px; font-size: 13px;
-}}
-QWidget#style QPushButton:hover {{ background: {INK_700}; }}
-QWidget#style QPushButton:checked {{ background: {ORANGE}; color: {INK_900}; }}
-
-QCheckBox {{ color: {GRAY_300}; font-size: 13px; spacing: 8px; }}
-QCheckBox::indicator {{
-    width: 14px; height: 14px; border-radius: 4px; background: {INK_800}; border: 1px solid {INK_700};
-}}
-QCheckBox::indicator:checked {{ background: {ORANGE}; border-color: {ORANGE}; }}
-
-QSlider::groove:horizontal {{ height: 4px; background: {INK_700}; border-radius: 2px; }}
-QSlider::sub-page:horizontal {{ background: {ORANGE}; border-radius: 2px; }}
-QSlider::handle:horizontal {{ background: {PAPER_50}; width: 14px; margin: -5px 0; border-radius: 7px; }}
+QCheckBox {{ font-size: 13px; }}
 """

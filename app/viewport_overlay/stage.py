@@ -1,8 +1,8 @@
 """The top half of the window: the live render with glass controls floating on it."""
 import math
 
-from PySide6.QtCore import QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEasingCurve, QPointF, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
+from PySide6.QtGui import QColor, QCursor, QImage, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
@@ -14,10 +14,16 @@ from PySide6.QtWidgets import (
 )
 
 from .controls import Dot, WindowButton
-from .theme import ASSETS, GRAY_500, INK_850, INK_950, LIME, PAPER_50
+from .theme import ASSETS, GRAY_500, INK_700, INK_850, INK_950, LIME, PAPER_50
 
 BLUR_DIVISOR = 24
 EDGE = 16
+MARK = 148
+GRID = 28
+SOLID_WINDOW = (0.32, 0.32, 0.56, 0.56)  # the logo's orange window, as shares of the mark
+REVEAL_MS = 560
+START_TITLE = "Point it at your model"
+START_HINT = "Select a region over any app, and the render appears here live."
 DARK_GLASS = QColor(17, 18, 20, 125)
 LIGHT_GLASS = QColor(243, 242, 238, 205)
 
@@ -78,11 +84,12 @@ class LiveCard(QWidget):
 class Stage(QWidget):
     resized = Signal()
     minimise_clicked = Signal()
+    maximise_clicked = Signal()
     close_clicked = Signal()
 
     def __init__(self, engine_switch: QWidget):
         super().__init__()
-        self.setMinimumHeight(300)
+        self.setMinimumHeight(240)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._image = None
         self._frame = None
@@ -92,24 +99,28 @@ class Stage(QWidget):
         self._chrome = 1.0
         self._live = False
         self._pulse = 0.0
+        self._empty = None
+        self._reveal = 1.0
+        self._mark = QSvgRenderer(str(ASSETS / "mark-color-on-dark.svg"))
 
-        self.message = QLabel("Select a region to get started", self)
-        self.message.setObjectName("stageMessage")
-        self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.message.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.message = self._caption(START_TITLE, "stageTitle")
+        self.hint = self._caption(START_HINT, "stageHint")
 
         self.logo = Logo()
         self.engine_switch = engine_switch
         self.live_card = LiveCard()
         self.minimise_button = WindowButton("minimise", "Minimise")
+        self.maximise_button = WindowButton("maximise", "Maximise")
         self.close_button = WindowButton("close", "Close ViewportOverlay")
         self.minimise_button.clicked.connect(self.minimise_clicked)
+        self.maximise_button.clicked.connect(self.maximise_clicked)
         self.close_button.clicked.connect(self.close_clicked)
 
         self._float(self.logo, DARK_GLASS, 12)
         self._float(self.engine_switch, LIGHT_GLASS, 16)
         self._float(self.live_card, DARK_GLASS, 14)
         self._float(self.minimise_button)
+        self._float(self.maximise_button)
         self._float(self.close_button)
         self.live_card.hide()
 
@@ -117,9 +128,27 @@ class Stage(QWidget):
         self._fade.setDuration(180)
         self._fade.valueChanged.connect(self.set_chrome)
 
+        self._reveal_run = QVariantAnimation(self)
+        self._reveal_run.setDuration(REVEAL_MS)
+        self._reveal_run.setStartValue(0.0)
+        self._reveal_run.setEndValue(1.0)
+        self._reveal_run.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self._reveal_run.valueChanged.connect(self._set_reveal)
+
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(50)
         self._pulse_timer.timeout.connect(self._step_pulse)
+
+    def _caption(self, text: str, name: str) -> QLabel:
+        label = QLabel(text, self)
+        label.setObjectName(name)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        return label
+
+    def _set_reveal(self, value: float):
+        self._reveal = value
+        self.update()
 
     def _float(self, widget, tint=None, radius=0):
         widget.setParent(self)
@@ -134,15 +163,28 @@ class Stage(QWidget):
         first = self._image is None
         self._image = image
         self.message.hide()
+        self.hint.hide()
         self._rebuild()
         self.update()
-        if first and not self.underMouse():
-            self._fade_to(0.0)
+        if first:
+            self._reveal_run.start()
+            if not self.underMouse():
+                self._fade_to(0.0)
 
-    def clear(self, message: str):
+    def set_waiting(self, text: str):
+        """Says what's happening while the first frame is on its way."""
+        if self._image is None:
+            self.message.setText(text)
+            self.hint.setText("The first render takes a few seconds.")
+
+    def clear(self):
         self._image = None
-        self.message.setText(message)
+        self._reveal_run.stop()
+        self._reveal = 1.0
+        self.message.setText(START_TITLE)
+        self.hint.setText(START_HINT)
         self.message.show()
+        self.hint.show()
         self.set_live(False)
         self._fade_to(1.0)
         self._rebuild()
@@ -173,14 +215,39 @@ class Stage(QWidget):
         self._pulse = (self._pulse + 0.2) % (2 * math.pi)
         self.update()
 
+    def _mark_rect(self) -> QRectF:
+        """Where the logo sits on the empty stage, in widget units."""
+        top = max((self.height() - MARK - 90) / 2, 58)
+        return QRectF((self.width() - MARK) / 2, top, MARK, MARK)
+
+    def _paint_empty(self, size: QSize) -> QImage:
+        """A faint drafting grid with the logo on it. Its orange window is where the render grows from."""
+        image = QImage(size, QImage.Format.Format_RGB32)
+        image.fill(QColor(INK_850))
+        scale = self.devicePixelRatioF()
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(INK_700))
+        step = GRID * scale
+        for row in range(int(size.height() / step) + 2):
+            for column in range(int(size.width() / step) + 2):
+                painter.drawEllipse(QPointF(column * step, row * step), scale, scale)
+        mark = self._mark_rect()
+        self._mark.render(painter, QRectF(mark.topLeft() * scale, mark.size() * scale))
+        painter.end()
+        return image
+
     def _rebuild(self):
         """Compose the render once, and keep a blurred copy for the glass to show."""
         size = self.size() * self.devicePixelRatioF()
         if size.isEmpty():
             return
+        if self._empty is None or self._empty.size() != size:
+            self._empty = self._paint_empty(size)
         frame = QImage(size, QImage.Format.Format_RGB32)
         if self._image is None:
-            frame.fill(QColor(INK_850))
+            frame = self._empty
         else:
             painter = QPainter(frame)
             cover = self._image.size().scaled(size, Qt.AspectRatioMode.KeepAspectRatioByExpanding)
@@ -205,7 +272,14 @@ class Stage(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawImage(self.rect(), self._frame)
+        if self._reveal < 1.0:
+            painter.drawImage(self.rect(), self._empty)
+            painter.save()
+            painter.setClipPath(self._reveal_shape())
+            painter.drawImage(self.rect(), self._frame)
+            painter.restore()
+        else:
+            painter.drawImage(self.rect(), self._frame)
         if self._chrome > 0:
             for widget, tint, radius in self._glass:
                 if widget.isVisible():
@@ -216,6 +290,24 @@ class Stage(QWidget):
             painter.setPen(QPen(glow, 3))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5))
+
+    def _reveal_shape(self) -> QPainterPath:
+        """The render grows out of the logo's orange window until it fills the stage."""
+        mark = self._mark_rect()
+        x, y, w, h = SOLID_WINDOW
+        seed = QRectF(mark.x() + x * MARK, mark.y() + y * MARK, w * MARK, h * MARK)
+        full = QRectF(self.rect())
+        t = self._reveal
+        rect = QRectF(
+            seed.x() + (full.x() - seed.x()) * t,
+            seed.y() + (full.y() - seed.y()) * t,
+            seed.width() + (full.width() - seed.width()) * t,
+            seed.height() + (full.height() - seed.height()) * t,
+        )
+        radius = 12 * (1 - t)
+        shape = QPainterPath()
+        shape.addRoundedRect(rect, radius, radius)
+        return shape
 
     def _paint_glass(self, painter, rect, tint, radius):
         shape = QPainterPath()
@@ -239,12 +331,15 @@ class Stage(QWidget):
 
     def resizeEvent(self, event):
         width, height = self.width(), self.height()
-        self.message.setGeometry(self.rect())
+        mark = self._mark_rect()
+        self.message.setGeometry(0, round(mark.bottom()) + 14, width, 34)
+        self.hint.setGeometry(0, round(mark.bottom()) + 50, width, 22)
         self.logo.move(EDGE, 14)
         self.engine_switch.adjustSize()
         self.engine_switch.move((width - self.engine_switch.width()) // 2, 14)
         self.close_button.move(width - EDGE - WindowButton.SIZE, 16)
-        self.minimise_button.move(self.close_button.x() - WindowButton.SIZE - 8, 16)
+        self.maximise_button.move(self.close_button.x() - WindowButton.SIZE - 8, 16)
+        self.minimise_button.move(self.maximise_button.x() - WindowButton.SIZE - 8, 16)
         self.live_card.move(width - EDGE - self.live_card.width(), height - self.live_card.height() - 34)
         self._rebuild()
         self.resized.emit()
@@ -253,9 +348,21 @@ class Stage(QWidget):
         self._fade_to(1.0)
 
     def leaveEvent(self, event):
-        if self._image is not None:
+        self.check_pointer()
+
+    def check_pointer(self):
+        """Fade the controls once the pointer has really gone.
+
+        Over the maximise button Windows takes the mouse, which looks like leaving.
+        """
+        inside = self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        if self._image is not None and not inside:
             self._fade_to(0.0)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.window().windowHandle().startSystemMove()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.maximise_clicked.emit()
