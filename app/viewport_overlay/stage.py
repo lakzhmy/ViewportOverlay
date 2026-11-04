@@ -22,6 +22,7 @@ MARK = 148
 GRID = 28
 SOLID_WINDOW = (0.32, 0.32, 0.56, 0.56)  # the logo's orange window, as shares of the mark
 REVEAL_MS = 560
+FLASH_MS = 260
 START_TITLE = "Point it at your model"
 START_HINT = "Select a region over any app, and the render appears here live."
 DARK_GLASS = QColor(17, 18, 20, 125)
@@ -101,6 +102,7 @@ class Stage(QWidget):
         self._pulse = 0.0
         self._empty = None
         self._reveal = 1.0
+        self._flash = 0.0
         self._mark = QSvgRenderer(str(ASSETS / "mark-color-on-dark.svg"))
 
         self.message = self._caption(START_TITLE, "stageTitle")
@@ -135,6 +137,13 @@ class Stage(QWidget):
         self._reveal_run.setEasingCurve(QEasingCurve.Type.InOutCubic)
         self._reveal_run.valueChanged.connect(self._set_reveal)
 
+        self._flash_run = QVariantAnimation(self)
+        self._flash_run.setDuration(FLASH_MS)
+        self._flash_run.setStartValue(0.5)
+        self._flash_run.setEndValue(0.0)
+        self._flash_run.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._flash_run.valueChanged.connect(self._set_flash)
+
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(50)
         self._pulse_timer.timeout.connect(self._step_pulse)
@@ -149,6 +158,18 @@ class Stage(QWidget):
     def _set_reveal(self, value: float):
         self._reveal = value
         self.update()
+
+    def _set_flash(self, value: float):
+        self._flash = value
+        self.update()
+
+    def flash(self):
+        """A quick pale wash, like a camera, to show a capture happened."""
+        self._flash_run.stop()
+        self._flash_run.start()
+
+    def current_image(self) -> QImage | None:
+        return self._image
 
     def _float(self, widget, tint=None, radius=0):
         widget.setParent(self)
@@ -280,6 +301,10 @@ class Stage(QWidget):
             painter.restore()
         else:
             painter.drawImage(self.rect(), self._frame)
+        if self._flash > 0:
+            wash = QColor(PAPER_50)
+            wash.setAlphaF(self._flash)
+            painter.fillRect(self.rect(), wash)
         if self._chrome > 0:
             for widget, tint, radius in self._glass:
                 if widget.isVisible():

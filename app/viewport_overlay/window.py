@@ -1,9 +1,11 @@
 """The main window: live render on top, dark settings underneath."""
 from ctypes import wintypes
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QCursor, QIcon, QImage
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -14,7 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .controls import Grip, Scale, Segmented, Swatch, Toggle
+from .capture import copy_image, load_settings, save_image, save_settings
+from .controls import FolderButton, Grip, Scale, Segmented, Swatch, Toggle
 from .engines import ENGINES, RenderParams
 from .region import RegionFrame, RegionPicker
 from .screen import (
@@ -36,6 +39,8 @@ from .worker import RenderWorker
 STYLES = [("Product", "Product render"), ("Clay", "Clay model"), ("Marker", "Marker sketch"), ("Studio", "Studio photo")]
 GRIP = 6
 CORNER = 14
+NOTICE_MS = 3000
+NO_FOLDER = "Choose folder"
 
 
 def label(text: str, name: str) -> QLabel:
@@ -53,10 +58,16 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(STYLE_SHEET)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
-        self.setMinimumSize(QSize(640, 560))  # small enough for a one-third snap tile
+        self.setMinimumSize(QSize(640, 600))  # narrow enough for a one-third snap tile
         self.resize(QSize(1040, 800))
 
         self.worker = None
+        self.capture_settings = load_settings()
+        self._state_text = "Nothing selected yet"
+        self._notice_timer = QTimer(self)
+        self._notice_timer.setSingleShot(True)
+        self._notice_timer.setInterval(NOTICE_MS)
+        self._notice_timer.timeout.connect(lambda: self.status.setText(self._state_text))
         self.region_frame = RegionFrame()
         self.region_frame.changed.connect(self._region_moved)
         self.region_frame.dismissed.connect(self.clear_region)
@@ -99,10 +110,14 @@ class MainWindow(QMainWindow):
         self.run_button = QPushButton("Start")
         self.run_button.setEnabled(False)
         self.run_button.clicked.connect(self.toggle_running)
+        self.capture_button = QPushButton("Capture")
+        self.capture_button.setEnabled(False)
+        self.capture_button.setToolTip("Keep the render on screen, using the Capture to switches below.")
+        self.capture_button.clicked.connect(self.capture)
         self.clear_button = QPushButton("Clear")
         self.clear_button.setEnabled(False)
         self.clear_button.clicked.connect(self.clear_region)
-        for button in (self.select_button, self.run_button, self.clear_button):
+        for button in (self.select_button, self.run_button, self.capture_button, self.clear_button):
             row.addWidget(button)
         return seam
 
@@ -159,6 +174,8 @@ class MainWindow(QMainWindow):
         columns.addLayout(tune)
         column.addLayout(columns)
 
+        column.addLayout(self._build_capture_row())
+
         self.on_top = Toggle("Keep on top")
         self.on_top.setChecked(True)
         self.on_top.toggled.connect(self._set_on_top)
@@ -180,6 +197,29 @@ class MainWindow(QMainWindow):
         column.addLayout(footer)
         self.follow_value.setText(str(self.follow_slider.value()))
         return panel
+
+    def _build_capture_row(self) -> QHBoxLayout:
+        self.to_folder = Toggle("Folder")
+        self.to_folder.setChecked(self.capture_settings["to_folder"])
+        self.to_folder.toggled.connect(self._capture_choice_changed)
+        self.folder_button = FolderButton()
+        self.folder_button.setEnabled(self.to_folder.isChecked())
+        self.folder_button.clicked.connect(self._choose_folder)
+        self._show_folder()
+        self.to_clipboard = Toggle("Clipboard")
+        self.to_clipboard.setChecked(self.capture_settings["to_clipboard"])
+        self.to_clipboard.toggled.connect(self._capture_choice_changed)
+        row = QHBoxLayout()
+        row.setSpacing(18)
+        row.addWidget(label("Capture to", "heading"))
+        folder = QHBoxLayout()
+        folder.setSpacing(4)
+        folder.addWidget(self.to_folder)
+        folder.addWidget(self.folder_button)
+        row.addLayout(folder)
+        row.addWidget(self.to_clipboard)
+        row.addStretch()
+        return row
 
     def _build_grips(self, parent) -> dict:
         edge = Qt.Edge
@@ -281,6 +321,62 @@ class MainWindow(QMainWindow):
             follow=self.follow_slider.value() / 100.0,
         )
 
+    def _say(self, text: str):
+        """Sets the ongoing status. A capture notice stays up until its time is over."""
+        self._state_text = text
+        if not self._notice_timer.isActive():
+            self.status.setText(text)
+
+    def _notice(self, text: str):
+        self.status.setText(text)
+        self._notice_timer.start()
+
+    def _show_folder(self):
+        folder = self.capture_settings["folder"]
+        self.folder_button.set_name(((Path(folder).name or folder) if folder else NO_FOLDER) + " ›")
+        self.folder_button.setToolTip(folder or "Pick where captures are saved")
+
+    def _capture_choice_changed(self):
+        self.capture_settings["to_folder"] = self.to_folder.isChecked()
+        self.capture_settings["to_clipboard"] = self.to_clipboard.isChecked()
+        self.folder_button.setEnabled(self.to_folder.isChecked())
+        save_settings(self.capture_settings)
+        self._refresh_capture()
+
+    def _refresh_capture(self):
+        wanted = self.to_folder.isChecked() or self.to_clipboard.isChecked()
+        self.capture_button.setEnabled(wanted and self.preview.current_image() is not None)
+
+    def _choose_folder(self) -> bool:
+        folder = QFileDialog.getExistingDirectory(self, "Choose where captures are saved", self.capture_settings["folder"])
+        if folder:
+            self.capture_settings["folder"] = str(Path(folder))
+            save_settings(self.capture_settings)
+            self._show_folder()
+        return bool(folder)
+
+    def capture(self):
+        image = self.preview.current_image()  # taken first, so this is the frame that was on screen at the click
+        if image is None:
+            return
+        wants_file = self.to_folder.isChecked()
+        has_folder = wants_file and (bool(self.capture_settings["folder"]) or self._choose_folder())
+        saved = save_image(image, Path(self.capture_settings["folder"])) if has_folder else None
+        copied = self.to_clipboard.isChecked()
+        if copied:
+            copy_image(image)
+        if saved or copied:
+            self.preview.flash()
+        if saved and copied:
+            self._notice("Saved and copied")
+        elif saved:
+            self._notice(f"Saved to {saved.parent.name or saved.parent}")
+        elif not wants_file:
+            self._notice("Copied to clipboard")
+        else:
+            reason = "can't write to that folder" if has_folder else "no folder chosen"
+            self._notice(f"{'Copied, but not saved' if copied else 'Not saved'}: {reason}")
+
     def select_region(self):
         self.region_frame.hide()
         self.select_button.setEnabled(False)
@@ -310,8 +406,9 @@ class MainWindow(QMainWindow):
         self.run_button.setEnabled(False)
         self.clear_button.setEnabled(False)
         self.preview.clear()
+        self._refresh_capture()
         self.preview.live_card.hide()
-        self.status.setText("Nothing selected yet")
+        self._say("Nothing selected yet")
         self._place_seam()
 
     def _region_moved(self, area: QRect):
@@ -368,37 +465,39 @@ class MainWindow(QMainWindow):
             worker.loading.disconnect(self._show_loading)
             worker.stop()
         self.run_button.setText("Start")
-        self.status.setText("Stopped")
+        self._say("Stopped")
         self.preview.set_live(False)
         self.region_frame.set_live(False)
         self.preview.live_card.show_state("Stopped")
         self.preview.live_card.rate.setText("–")
 
     def _show_loading(self, message: str):
-        self.status.setText(message)
+        self._say(message)
         self.preview.set_waiting(message)
         self.preview.live_card.show_state("Loading", ORANGE)
 
     def _show_frame(self, image: QImage, fps: float):
         card = self.preview.live_card
         self.preview.show_image(image)
+        self._refresh_capture()
         self.preview.set_live(True)
         self.region_frame.set_live(True)
         card.show_state("Live", LIME)
         if fps:
             card.rate.setText(f"{fps:.0f} fps")
         card.size_label.setText(f"{image.width()} × {image.height()}")
-        self.status.setText("Rendering")
+        self._say("Rendering")
 
     def _show_idle(self):
         self.preview.set_live(False)
         self.region_frame.set_live(False)
         self.preview.live_card.show_state("Paused", GRAY_500)
-        self.status.setText("Paused until your screen changes")
+        self._say("Paused until your screen changes")
 
     def _show_failure(self, message: str):
         self.stop()
-        self.status.setText(f"Something went wrong: {message}")
+        self._notice_timer.stop()
+        self._say(f"Something went wrong: {message}")
 
     def closeEvent(self, event):
         self.stop()

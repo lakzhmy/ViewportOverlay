@@ -294,6 +294,42 @@ class Toggle(QCheckBox):
         painter.drawText(area, Qt.AlignmentFlag.AlignVCenter, self.text())
 
 
+class FolderButton(QPushButton):
+    """Shows the chosen folder's name. A long name shortens with "…" instead of pushing other controls."""
+
+    PADDING = 10
+    LONGEST = 220
+    SHORTEST = 70
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("folder")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._name = ""
+
+    def set_name(self, name: str):
+        self._name = name
+        self.updateGeometry()
+        self._fit()
+
+    def _fit(self):
+        self.ensurePolished()
+        room = self.width() - self.PADDING
+        self.setText(self.fontMetrics().elidedText(self._name, Qt.TextElideMode.ElideMiddle, room))
+
+    def sizeHint(self) -> QSize:
+        self.ensurePolished()
+        width = self.fontMetrics().horizontalAdvance(self._name) + self.PADDING + 2
+        return QSize(min(width, self.LONGEST), 22)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self.SHORTEST, 22)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
+
+
 class Grip(QWidget):
     """An invisible strip along a window edge. Dragging it resizes the window."""
 

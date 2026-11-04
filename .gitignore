@@ -18,6 +18,9 @@ StreamDiffusionTest/StreamDiffusion/
 *.log
 speed_test_output/
 
+# Your own app choices, such as the capture folder
+app/settings.json
+
 # Private settings, for when cloud engines arrive
 .env
 .env.*

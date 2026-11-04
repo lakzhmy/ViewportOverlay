@@ -74,4 +74,11 @@ QWidget#engine QPushButton:hover {{ background: {PAPER_100}; }}
 QWidget#engine QPushButton:checked {{ background: {INK_900}; color: {PAPER_50}; }}
 
 QCheckBox {{ font-size: 13px; }}
+
+QPushButton#folder {{
+    background: transparent; color: {GRAY_300}; font-size: 13px; font-weight: 400;
+    padding: 2px 5px; text-align: left; border-radius: 6px;
+}}
+QPushButton#folder:hover {{ background: {INK_800}; color: {PAPER_50}; }}
+QPushButton#folder:disabled {{ color: {GRAY_500}; }}
 """
