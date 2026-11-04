@@ -18,7 +18,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from viewport_overlay import capture as capture_module
-from viewport_overlay.engines import LocalTurboEngine, StandInEngine
+from viewport_overlay.engines import LocalKleinEngine, LocalTurboEngine, StandInEngine
 from viewport_overlay.screen import to_physical
 from viewport_overlay.window import MainWindow
 
@@ -107,7 +107,7 @@ click_widget(button)
 check("clicking a look selects it", window.look_box.currentIndex() == 0)
 check("the panel stays open to try looks", stage.panel.isVisible())
 check("AI looks use the prompt", window.prompt_box.isEnabled())
-check("the look picks its engine", window._engine is LocalTurboEngine)
+check("the look picks its engine", window._engine is LocalKleinEngine)
 click(stage.panel.mapToGlobal(QPoint(stage.panel.width() - 12, 100)))
 check("a click on the panel's background keeps it open", stage.panel.isVisible())
 window.prompt_box.setPlainText("a red kettle")
@@ -145,7 +145,7 @@ check("the status shows it's running", window.status.text().startswith(("Live", 
 check("the shutter is ready", window.capture_button.isEnabled())
 worker = window.worker
 click_widget(stage.orb)
-click_widget(window.look_box._group.button(1))
+click_widget(window.look_box._group.button(3))
 check("an AI look from Filter swaps the engine", window.worker is not worker and window._engine is LocalTurboEngine)
 click_widget(window.look_box._group.button(4))
 worker = window.worker

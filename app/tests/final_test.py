@@ -182,8 +182,8 @@ check("a landscape region keeps its shape", cloud.send_size(800, 400) == (1536, 
 check("a portrait region keeps its shape", cloud.send_size(300, 600) == (768, 1536), str(cloud.send_size(300, 600)))
 check("Medium is the listed price", cloud.estimate_price(1920, 1080, "medium") == 0.053, str(cloud.estimate_price(1920, 1080, "medium")))
 check("High costs more than Low", cloud.estimate_price(800, 800, "high") > cloud.estimate_price(800, 800, "low"))
-wording = cloud.final_prompt(RenderParams(prompt="a red kettle", style="Clay model"))
-check("the prompt has the look, the words and the drawing rule", wording.startswith("Clay model of a red kettle") and "proportions" in wording, wording)
+wording = cloud.final_prompt(RenderParams(prompt="a red kettle", style="Place it on a black backdrop."))
+check("the prompt has the look, the words and the drawing rule", "a red kettle" in wording and "black backdrop" in wording and "proportions" in wording, wording)
 
 window = window_module.MainWindow()
 stage = window.preview
@@ -236,10 +236,6 @@ check("saying no sends nothing", len(Fal.requests) == 0 and window._final is Non
 # Saying yes.
 Asker.answer = QMessageBox.StandardButton.Yes
 window.prompt_box.setPlainText("a red kettle")
-window.look_box.setCurrentIndex(1)
-pump(0.8)
-window.look_box.setCurrentIndex(4)
-pump(0.5)
 click(pill)
 check("the status says it's working", wait_for(lambda: len(Fal.requests) == 1))
 wait_for(lambda: window._final is None)
@@ -254,7 +250,7 @@ uri = sent["body"]["image_urls"][0]
 check("the region goes as an image", uri.startswith("data:image/png;base64,"))
 received = QImage.fromData(base64.b64decode(uri.split(",", 1)[1]))
 check("the image is the full-size shape of the region", received.width() == 1536 and received.height() == 1024, f"{received.width()} × {received.height()}")
-check("Filter sends a real look instead", sent["body"]["prompt"].startswith("Product render of a red kettle"), sent["body"]["prompt"])
+check("Filter sends a real look instead", "casino floor" in sent["body"]["prompt"] and "a red kettle" in sent["body"]["prompt"], sent["body"]["prompt"])
 
 # The result.
 final = QImage.fromData(Fal.picture).convertToFormat(QImage.Format.Format_RGB888)

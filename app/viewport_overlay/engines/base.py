@@ -9,6 +9,7 @@ class RenderParams:
     prompt: str = ""
     style: str = ""
     follow: float = 0.33  # "Follow my drawing": 0 = loose, 1 = strict
+    reference: str = ""  # a look's reference image, for engines that use one
 
 
 class Engine:

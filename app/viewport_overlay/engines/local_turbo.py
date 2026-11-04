@@ -9,9 +9,6 @@ import numpy as np
 from .base import Engine, RenderParams
 
 AI_FOLDER = Path(__file__).resolve().parents[3] / "StreamDiffusionTest"
-PYTHON = AI_FOLDER / "env" / "python.exe"
-SERVER = AI_FOLDER / "render_server.py"
-LOG = AI_FOLDER / "render_server.log"
 
 # How much the AI may change the image. Lower numbers change it more.
 LOOSEST_INDEX = 5
@@ -36,21 +33,25 @@ def strength_index(follow: float) -> int:
 class LocalTurboEngine(Engine):
     name = "Local SD-Turbo (this PC)"
     label = "Local"
+    folder = AI_FOLDER
+    server_arguments = ()
 
     def __init__(self):
         self._process = None
 
     def start(self) -> None:
-        if not PYTHON.exists() or not SERVER.exists():
-            raise RuntimeError(f"AI install not found in {AI_FOLDER}")
+        python = self.folder / "env" / "python.exe"
+        server = self.folder / "render_server.py"
+        if not python.exists() or not server.exists():
+            raise RuntimeError(f"AI install not found in {self.folder}")
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        with open(LOG, "wb") as log:
+        with open(self.folder / "render_server.log", "wb") as log:
             self._process = subprocess.Popen(
-                [str(PYTHON), str(SERVER)],
+                [str(python), str(server), *self.server_arguments],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=log,
-                cwd=str(AI_FOLDER),
+                cwd=str(self.folder),
                 creationflags=flags,
             )
         self._read_header()
@@ -73,27 +74,29 @@ class LocalTurboEngine(Engine):
     def _read_header(self) -> dict:
         line = self._process.stdout.readline() if self._process else b""
         if not line:
-            raise RuntimeError(f"The AI program stopped. Details are in {LOG.name}")
+            raise RuntimeError("The AI program stopped. Details are in render_server.log")
         header = json.loads(line)
         if "error" in header:
             raise RuntimeError(header["error"])
         return header
 
-    def render(self, frame: np.ndarray, params: RenderParams) -> np.ndarray:
-        height, width, _ = frame.shape
-        request = {
+    def _request(self, width: int, height: int, params: RenderParams) -> bytes:
+        return json.dumps({
             "width": width,
             "height": height,
             "prompt": build_prompt(params),
             "index": strength_index(params.follow),
-        }
+        }).encode()
+
+    def render(self, frame: np.ndarray, params: RenderParams) -> np.ndarray:
+        height, width, _ = frame.shape
         pipe = self._process.stdin
-        pipe.write(json.dumps(request).encode() + b"\n")
+        pipe.write(self._request(width, height, params) + b"\n")
         pipe.write(frame.tobytes())
         pipe.flush()
         header = self._read_header()
         size = header["width"] * header["height"] * 3
         data = self._process.stdout.read(size)
         if len(data) != size:
-            raise RuntimeError(f"The AI program stopped. Details are in {LOG.name}")
+            raise RuntimeError("The AI program stopped. Details are in render_server.log")
         return np.frombuffer(data, np.uint8).reshape(header["height"], header["width"], 3)

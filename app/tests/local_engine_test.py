@@ -96,6 +96,7 @@ area = QRect(screen.left() + 120, screen.top() + 140, 512, 512)
 drawing = Drawing(area)
 drawing.show()
 window = MainWindow()
+window.look_box.setCurrentIndex(3)  # the Fast look runs SD-Turbo
 window.move(screen.left() + 700, screen.top() + 100)
 window.prompt_box.setPlainText(PROMPT)
 window.show()

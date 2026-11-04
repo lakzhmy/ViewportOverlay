@@ -87,8 +87,8 @@ def estimate_price(width: int, height: int, quality: str) -> float:
 
 
 def final_prompt(params: RenderParams) -> str:
-    subject = f"{params.style} of {params.prompt}" if params.prompt else params.style
-    return f"{subject}. {FOLLOW_DRAWING}"
+    notes = f" {params.prompt}." if params.prompt else ""
+    return f"Turn this into a photorealistic product render of a tall upright gaming terminal.{notes} {params.style} {FOLLOW_DRAWING}"
 
 
 def grab_region(region: dict) -> np.ndarray:

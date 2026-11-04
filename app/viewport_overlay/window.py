@@ -325,6 +325,7 @@ class MainWindow(QMainWindow):
             prompt=self.prompt_box.toPlainText().strip(),
             style=self.look_box.currentData().style,
             follow=self.follow_slider.value() / 100.0,
+            reference=self.look_box.currentData().reference,
         )
 
     def _say(self, text: str):
@@ -399,7 +400,7 @@ class MainWindow(QMainWindow):
         if self._final or not self._fal_key or not area.isValid() or not self._agreed_to_cloud():
             return
         look = self.look_box.currentData()
-        style = look.style if look.engine.uses_prompt else LOOKS[0].style
+        style = look.style if look.folder else LOOKS[0].style
         params = RenderParams(prompt=self.prompt_box.toPlainText().strip(), style=style)
         self._final = FinalRender(self._fal_key, grab_region(to_physical(area)), params, self.capture_settings["quality"])
         self._final.finished.connect(self._final_done)
