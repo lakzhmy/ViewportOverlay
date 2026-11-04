@@ -1,0 +1,26 @@
+# Installed software
+env/
+.conda_pkgs/
+.hf_home/
+__pycache__/
+*.pyc
+
+# AI models and the StreamDiffusion copy (downloaded separately, see README)
+models/
+StreamDiffusionTest/StreamDiffusion/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+
+# Logs and test results
+*.log
+speed_test_output/
+
+# Private settings, for when cloud engines arrive
+.env
+.env.*
+*.key
+*.pem
+secrets.*
