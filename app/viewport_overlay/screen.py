@@ -22,6 +22,11 @@ WM_NCHITTEST = 0x0084
 WM_NCLBUTTONDOWN = 0x00A1
 WM_NCLBUTTONUP = 0x00A2
 HTMAXBUTTON = 9
+WM_HOTKEY = 0x0312
+CAPTURE_KEY_ID = 1
+CAPTURE_KEY_NAME = "Ctrl+Alt+C"
+CAPTURE_KEY_MODIFIERS = 0x0001 | 0x0002 | 0x4000  # Alt, Ctrl, and no repeats while it's held down
+CAPTURE_KEY = 0x43  # the C key
 
 
 def exclude_from_capture(widget, excluded: bool = True) -> bool:
@@ -73,6 +78,20 @@ def maximised_inset(hwnd: int) -> int:
     user32.GetDpiForWindow.argtypes = [wintypes.HWND]
     dpi = user32.GetDpiForWindow(hwnd)
     return user32.GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + user32.GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+
+
+def claim_capture_key(hwnd: int) -> bool:
+    """Reserves the capture shortcut for this window. The app only ever sees this one key."""
+    register = ctypes.windll.user32.RegisterHotKey
+    register.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+    register.restype = wintypes.BOOL
+    return bool(register(hwnd, CAPTURE_KEY_ID, CAPTURE_KEY_MODIFIERS, CAPTURE_KEY))
+
+
+def release_capture_key(hwnd: int) -> None:
+    release = ctypes.windll.user32.UnregisterHotKey
+    release.argtypes = [wintypes.HWND, ctypes.c_int]
+    release(hwnd, CAPTURE_KEY_ID)
 
 
 def set_app_id() -> None:

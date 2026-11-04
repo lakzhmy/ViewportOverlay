@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -21,7 +20,7 @@ from .theme import INK_950, LIME, PAPER_50, STONE
 BLUR_DIVISOR = 24
 EDGE = 16
 RADIUS = 14
-BAR_TOP = 60
+POINTER_CHECK_MS = 100
 BAR_LONGEST = 300
 PANEL_GAP = 12
 SOLID_WINDOW = (0.32, 0.32, 0.56, 0.56)  # the logo's inner window, as shares of the mark
@@ -40,16 +39,12 @@ def blurred(image: QImage, size: QSize) -> QImage:
 
 
 class LookPanel(QFrame):
-    """Opens from the orb: what to render and in which look."""
+    """Opens from the orb: which look to render in."""
 
     def __init__(self):
         super().__init__()
         self.setObjectName("panel")
-        self.setFixedSize(320, 318)
-        self.prompt_box = QPlainTextEdit()
-        self.prompt_box.setPlaceholderText("Describe it: modern coffee machine, studio light")
-        self.prompt_box.document().setDocumentMargin(0)
-        self.prompt_box.setFixedHeight(58)
+        self.setFixedSize(320, 258)
         self.look_box = LookBox(LOOKS)
         local = LineButton("Local")
         local.setChecked(True)
@@ -65,7 +60,6 @@ class LookPanel(QFrame):
         column = QVBoxLayout(self)
         column.setContentsMargins(16, 14, 16, 12)
         column.setSpacing(10)
-        column.addWidget(self.prompt_box)
         column.addWidget(self.look_box)
         column.addStretch()
         column.addLayout(tabs)
@@ -92,6 +86,7 @@ class Stage(QWidget):
         self._reveal = 1.0
         self._flash = 0.0
         self._chrome = 1.0
+        self._chrome_target = 1.0
 
         self.message = self._caption(START_TITLE, "stageTitle")
         self.hint = self._caption(START_HINT, "stageHint")
@@ -108,8 +103,7 @@ class Stage(QWidget):
         self.maximise_button.clicked.connect(self.maximise_clicked)
         self.close_button.clicked.connect(self.close_clicked)
         self.orb.clicked.connect(lambda: self.show_panel(True))
-        for widget in (self.logo, self.shutter, self.orb, self.bar,
-                       self.minimise_button, self.maximise_button, self.close_button):
+        for widget in (self.logo, self.shutter, self.orb, self.bar):
             self._float(widget)
 
         self.amount = QLabel(self)
@@ -144,6 +138,11 @@ class Stage(QWidget):
         self._pulse_timer = QTimer(self)
         self._pulse_timer.setInterval(50)
         self._pulse_timer.timeout.connect(self._step_pulse)
+
+        self._pointer_timer = QTimer(self)
+        self._pointer_timer.setInterval(POINTER_CHECK_MS)
+        self._pointer_timer.timeout.connect(self._check_pointer)
+        self._pointer_timer.start()
 
     def _caption(self, text: str, name: str) -> QLabel:
         label = QLabel(text, self)
@@ -184,7 +183,6 @@ class Stage(QWidget):
         self.update()
         if first:
             self._reveal_run.start()
-            self.check_pointer()
 
     def set_waiting(self, text: str):
         """Says what's happening while the first frame is on its way."""
@@ -210,8 +208,6 @@ class Stage(QWidget):
         self.panel.setVisible(shown)
         self.orb.setVisible(not shown)
         self._place_shutter()
-        if not shown:
-            self.check_pointer()
 
     def _place_shutter(self):
         covered = self.panel.isVisibleTo(self) and self.panel.geometry().intersects(self.shutter.geometry())
@@ -232,6 +228,7 @@ class Stage(QWidget):
         for effect in self._floating:
             effect.setEnabled(value < 1.0)
             effect.setOpacity(value)
+            effect.parent().update()
 
     def _fade_to(self, value: float):
         self._fade.stop()
@@ -314,34 +311,27 @@ class Stage(QWidget):
         self.message.setGeometry(0, middle - 34, width, 34)
         self.hint.setGeometry(0, middle + 4, width, 22)
         self.logo.move(EDGE, EDGE)
-        self.close_button.move(width - EDGE - WindowButton.SIZE, 16)
-        self.maximise_button.move(self.close_button.x() - WindowButton.SIZE - 6, 16)
-        self.minimise_button.move(self.maximise_button.x() - WindowButton.SIZE - 6, 16)
         self.orb.move(width - EDGE - Orb.SIZE, height - EDGE - Orb.SIZE)
         self.shutter.move((width - Shutter.SIZE) // 2, height - EDGE - Shutter.SIZE)
         self.panel.move(width - PANEL_GAP - self.panel.width(), height - PANEL_GAP - self.panel.height())
-        bar_x = self.close_button.geometry().center().x() - StrengthBar.WIDTH // 2
-        room = self.panel.y() - PANEL_GAP - BAR_TOP  # the bar stays clear of the panel, so it doesn't jump when that opens
-        self.bar.setGeometry(bar_x, BAR_TOP, StrengthBar.WIDTH, max(min(room, BAR_LONGEST), 80))
+        room = self.panel.y() - PANEL_GAP - EDGE  # the bar stays clear of the panel, so it doesn't jump when that opens
+        self.bar.setGeometry(width - EDGE - StrengthBar.WIDTH, EDGE, StrengthBar.WIDTH, max(min(room, BAR_LONGEST), 80))
         self._place_shutter()
         self._place_amount()
         self._rebuild()
         self.resized.emit()
 
-    def enterEvent(self, event):
-        self._fade_to(1.0)
+    def _check_pointer(self):
+        """Show the controls while the pointer is over the window, and fade them once it's gone.
 
-    def leaveEvent(self, event):
-        self.check_pointer()
-
-    def check_pointer(self):
-        """Fade the controls once the pointer has really gone.
-
-        Over the maximise button Windows takes the mouse, which looks like leaving.
+        This looks at where the pointer really is. Windows doesn't always say when the
+        pointer comes back, for example after a click on the render starts its drag loop.
         """
-        inside = self.rect().contains(self.mapFromGlobal(QCursor.pos()))
-        if self._image is not None and not inside and not self.panel.isVisible():
-            self._fade_to(0.0)
+        inside = self.window().frameGeometry().contains(QCursor.pos())
+        target = 1.0 if inside or self._image is None or self.panel.isVisible() else 0.0
+        if target != self._chrome_target:
+            self._chrome_target = target
+            self._fade_to(target)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

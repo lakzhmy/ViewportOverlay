@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -83,6 +83,8 @@ stage = window.preview
 snap("cam_1_empty.png")
 
 check("no Start or Stop button is left", not hasattr(window, "run_button"))
+check("the description is always on show", window.prompt_box.isVisible() and not stage.panel.isVisible())
+check("the window buttons sit above the render", stage.close_button.mapTo(window, QPoint(0, 0)).y() < stage.mapTo(window, QPoint(0, 0)).y())
 check("the logo starts white", not window.logo.on)
 check("the shutter waits for a render", not window.capture_button.isEnabled())
 
@@ -99,7 +101,6 @@ window.look_box.setCurrentIndex(4)
 click_widget(stage.orb)
 check("the orb opens the panel", stage.panel.isVisible())
 check("the orb steps aside for the panel", not stage.orb.isVisible())
-check("the prompt is in the panel", window.prompt_box.isVisible())
 check("the Filter look turns the prompt off", not window.prompt_box.isEnabled())
 button = window.look_box._group.button(0)
 click_widget(button)
@@ -168,11 +169,68 @@ check("controls fade out when the pointer leaves", stage._chrome < 0.05, str(sta
 point_to(stage.mapToGlobal(QPoint(300, 300)))
 pump(0.4)
 check("controls come back", stage._chrome > 0.95, str(stage._chrome))
+
+# The stuck hover: clicking the render starts a Windows drag loop, and the pointer's return then went unnoticed.
+outside = QPoint(work.left() + 40, work.top() + 40)
+click(stage.mapToGlobal(QPoint(300, 300)))
+point_to(outside)
+pump(0.5)
+point_to(stage.mapToGlobal(QPoint(300, 300)))
+pump(0.5)
+check("controls come back after clicking the render", stage._chrome > 0.95, str(stage._chrome))
+point_to(outside)
+pump(0.5)
+point_to(window.status.mapToGlobal(window.status.rect().center()))
+pump(0.5)
+check("the bottom line counts as over the window", stage._chrome > 0.95, str(stage._chrome))
+maximise = stage.maximise_button
+point_to(maximise.mapToGlobal(maximise.rect().center()))
+pump(1.0)
+check("controls stay on over the maximise button", stage._chrome > 0.95, str(stage._chrome))
+point_to(outside)
+pump(0.5)
+point_to(stage.mapToGlobal(QPoint(300, 300)))
+pump(0.5)
+check("controls come back after the maximise button", stage._chrome > 0.95, str(stage._chrome))
 click_widget(stage.orb)
 point_to(QPoint(work.left() + 40, work.top() + 40))
 pump(0.5)
 check("an open panel keeps the controls up", stage._chrome > 0.95, str(stage._chrome))
 stage.show_panel(False)
+
+# The shortcut, pressed with the pointer away from the window.
+CTRL, ALT, C_KEY, KEY_UP = 0x11, 0x12, 0x43, 0x0002
+
+
+def press_shortcut():
+    for key in (CTRL, ALT, C_KEY):
+        user32.keybd_event(key, 0, 0, 0)
+    for key in (C_KEY, ALT, CTRL):
+        user32.keybd_event(key, 0, KEY_UP, 0)
+    pump(0.4)
+
+
+check("the shortcut is reserved (close any open copy of the app first)", window._key_window == int(window.winId()))
+folder = Path(tempfile.mkdtemp(prefix="camera_shots_"))
+window.capture_settings["folder"] = str(folder)
+point_to(outside)
+QGuiApplication.clipboard().setText("untouched")
+pump(0.05)
+press_shortcut()
+check("the shortcut saves the render", len(list(folder.glob("*.png"))) == 1)
+check("the shortcut copies the render", QGuiApplication.clipboard().text() != "untouched" and not QGuiApplication.clipboard().image().isNull())
+window.on_top.setChecked(False)
+pump(0.3)
+window.on_top.setChecked(True)
+pump(0.3)
+press_shortcut()
+check("the shortcut survives Keep on top", len(list(folder.glob("*.png"))) == 2)
+window.to_clipboard.setChecked(False)
+window.to_folder.setChecked(False)
+press_shortcut()
+check("the shortcut explains when both are off", window.status.text() == "Turn on clipboard or folder first", window.status.text())
+window.to_clipboard.setChecked(True)
+window.to_folder.setChecked(True)
 
 # Screenshots of the design with a real picture.
 if OUT:

@@ -1,10 +1,10 @@
 """The camera's parts: logo, shutter, orb, strength bar, text switches and resize grips."""
 from PySide6.QtCore import QByteArray, QPointF, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QRadialGradient
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen, QRadialGradient
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QAbstractButton, QButtonGroup, QGridLayout, QSlider, QWidget
 
-from .theme import ASSETS, FONT, GRAY_400, GRAY_500, INK_700, INK_900, ORANGE, PAPER_50
+from .theme import ASSETS, FONT, GRAY_400, GRAY_500, INK_700, INK_900, ORANGE, PAPER_100, PAPER_50
 
 
 def paint_orb(painter: QPainter, area: QRectF, colors: tuple):
@@ -21,14 +21,15 @@ def paint_orb(painter: QPainter, area: QRectF, colors: tuple):
 
 
 class WindowButton(QAbstractButton):
-    """A round window button that sits on the render."""
+    """A small plain window symbol in the strip above the render."""
 
-    SIZE = 28
+    WIDTH = 28
+    HEIGHT = 22
 
     def __init__(self, kind: str, tip: str):
         super().__init__()
         self._kind = kind
-        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         self.setToolTip(tip)
         self._hot = False
@@ -46,42 +47,41 @@ class WindowButton(QAbstractButton):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        fill = QColor(PAPER_50)
-        fill.setAlphaF(1.0 if self.underMouse() or self._hot else 0.82)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(fill)
-        painter.drawEllipse(QRectF(self.rect()))
-        pen = QPen(QColor(INK_900), 1.75)
+        if self.underMouse() or self._hot:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(PAPER_100))
+            painter.drawRoundedRect(QRectF(self.rect()), 6, 6)
+        pen = QPen(QColor(INK_700), 1.25)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(pen)
-        middle = self.SIZE / 2
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        x, y = self.WIDTH / 2, self.HEIGHT / 2
         if self._kind == "close":
-            painter.drawLine(QPointF(middle - 4.5, middle - 4.5), QPointF(middle + 4.5, middle + 4.5))
-            painter.drawLine(QPointF(middle + 4.5, middle - 4.5), QPointF(middle - 4.5, middle + 4.5))
+            painter.drawLine(QPointF(x - 3.5, y - 3.5), QPointF(x + 3.5, y + 3.5))
+            painter.drawLine(QPointF(x + 3.5, y - 3.5), QPointF(x - 3.5, y + 3.5))
         elif self._kind == "maximise":
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QRectF(middle - 5, middle - 5, 10, 10), 2.5, 2.5)
+            painter.drawRoundedRect(QRectF(x - 3.5, y - 3.5, 7, 7), 2.5, 2.5)
         elif self._kind == "restore":
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(QRectF(middle - 5.5, middle - 2.5, 8, 8), 2, 2)
-            painter.drawArc(QRectF(middle - 2.5, middle - 5.5, 8, 8), 0, 90 * 16)
+            painter.drawRoundedRect(QRectF(x - 4, y - 2, 6, 6), 2, 2)
+            painter.drawArc(QRectF(x - 2, y - 4, 6, 6), 0, 90 * 16)
         else:
-            painter.drawLine(QPointF(middle - 5, middle), QPointF(middle + 5, middle))
+            painter.drawLine(QPointF(x - 4, y), QPointF(x + 4, y))
 
 
 class LogoButton(QAbstractButton):
     """The logo is the region button. Its inner window turns orange while a region is selected."""
 
     SIZE = 56
+    EDGE_OFFSETS = [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y]
 
     def __init__(self):
         super().__init__()
         self.setFixedSize(self.SIZE, self.SIZE)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         art = (ASSETS / "mark-color-on-dark.svg").read_text(encoding="utf-8")
         self._on_art = QSvgRenderer(QByteArray(art.encode()), self)
         self._off_art = QSvgRenderer(QByteArray(art.replace(ORANGE, PAPER_50).encode()), self)
+        self._pictures = {}
         self.on = False
 
     def set_on(self, on: bool):
@@ -89,16 +89,37 @@ class LogoButton(QAbstractButton):
         self.setToolTip("Clear the region" if on else "Select a region")
         self.update()
 
+    def _blank(self, scale: float) -> QImage:
+        image = QImage(self.size() * scale, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        return image
+
+    def _picture(self, scale: float) -> QImage:
+        """The logo with a crisp dark edge, so it stays white and still reads on pale renders."""
+        key = (self.on, scale)
+        if key not in self._pictures:
+            art = self._blank(scale)
+            painter = QPainter(art)
+            (self._on_art if self.on else self._off_art).render(painter)
+            painter.end()
+            edge = art.copy()
+            painter = QPainter(edge)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            painter.fillRect(edge.rect(), QColor(10, 11, 12, 170))
+            painter.end()
+            picture = self._blank(scale)
+            painter = QPainter(picture)
+            for x, y in self.EDGE_OFFSETS:
+                painter.drawImage(round(x * scale), round(y * scale), edge)
+            painter.drawImage(0, 0, art)
+            painter.end()
+            self._pictures[key] = picture
+        return self._pictures[key]
+
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        area = QRectF(self.rect())
-        shade = QRadialGradient(area.center(), area.width() / 2)  # keeps the white logo readable on pale renders
-        shade.setColorAt(0.0, QColor(10, 11, 12, 120 if self.underMouse() else 80))
-        shade.setColorAt(0.7, QColor(10, 11, 12, 50))
-        shade.setColorAt(1.0, QColor(10, 11, 12, 0))
-        painter.fillRect(area, shade)
-        (self._on_art if self.on else self._off_art).render(painter, area)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawImage(self.rect(), self._picture(self.devicePixelRatioF()))
 
 
 class Shutter(QAbstractButton):

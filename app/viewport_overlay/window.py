@@ -1,4 +1,4 @@
-"""The main window: a simple camera. Viewfinder on top, one line of options underneath."""
+"""The main window: a simple camera. Viewfinder on top, then the description and one line of options."""
 from ctypes import wintypes
 from pathlib import Path
 
@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPlainTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -19,14 +20,19 @@ from .controls import Grip, LineButton
 from .engines import RenderParams
 from .region import RegionFrame, RegionPicker
 from .screen import (
+    CAPTURE_KEY_ID,
+    CAPTURE_KEY_NAME,
     HTMAXBUTTON,
+    WM_HOTKEY,
     WM_NCCALCSIZE,
     WM_NCHITTEST,
     WM_NCLBUTTONDOWN,
     WM_NCLBUTTONUP,
+    claim_capture_key,
     enable_native_frame,
     exclude_from_capture,
     maximised_inset,
+    release_capture_key,
     style_native_window,
     to_physical,
 )
@@ -37,7 +43,8 @@ from .worker import RenderWorker
 GRIP = 6
 CORNER = 14
 NOTICE_MS = 3000
-MARGIN = 12
+MARGIN = 18
+STRIP = 30
 FOOTER = 44
 NO_FOLDER = "choose folder"
 FILTER_NOTE = "The Filter look doesn't use a description."
@@ -59,9 +66,10 @@ class MainWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
         self.setMinimumSize(QSize(640, 600))  # narrow enough for a one-third snap tile
-        self.resize(QSize(860, 900))
+        self.resize(QSize(860, 950))
 
         self.worker = None
+        self._key_window = 0
         self.capture_settings = load_settings()
         self._state_text = "Nothing selected yet"
         self._notice_timer = QTimer(self)
@@ -83,23 +91,23 @@ class MainWindow(QMainWindow):
         self.logo.clicked.connect(self._logo_clicked)
         self.capture_button = self.preview.shutter
         self.capture_button.setEnabled(False)
-        self.capture_button.setToolTip("Capture this render")
+        self.capture_button.setToolTip(f"Capture this render ({CAPTURE_KEY_NAME})")
         self.capture_button.clicked.connect(self.capture)
         self.follow_slider = self.preview.bar
         self.follow_slider.setRange(0, 100)
         self.follow_slider.setValue(33)
         self.follow_slider.valueChanged.connect(self._params_changed)
-        self.prompt_box = self.preview.panel.prompt_box
-        self.prompt_box.textChanged.connect(self._params_changed)
         self.look_box = self.preview.panel.look_box
         self.look_box.currentIndexChanged.connect(self._look_changed)
 
         root = QWidget()
         root.setObjectName("root")
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(MARGIN, MARGIN, MARGIN, 0)
+        layout.setContentsMargins(MARGIN, 0, MARGIN, 0)
         layout.setSpacing(0)
+        layout.addWidget(self._build_strip())
         layout.addWidget(self.preview, 1)
+        layout.addWidget(self._build_prompt())
         layout.addWidget(self._build_footer())
         self.setCentralWidget(root)
         self._grips = self._build_grips(root)
@@ -109,6 +117,33 @@ class MainWindow(QMainWindow):
         self._hover_check = QTimer(self)
         self._hover_check.setInterval(80)
         self._hover_check.timeout.connect(self._check_maximise_hover)
+
+    def _build_strip(self) -> QFrame:
+        strip = QFrame()
+        strip.setFixedHeight(STRIP)
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+        row.addStretch()
+        row.addWidget(self.preview.minimise_button)
+        row.addWidget(self.preview.maximise_button)
+        row.addWidget(self.preview.close_button)
+        return strip
+
+    def _build_prompt(self) -> QFrame:
+        self.prompt_box = QPlainTextEdit()
+        self.prompt_box.setPlaceholderText("modern coffee machine, studio light")
+        self.prompt_box.document().setDocumentMargin(0)
+        self.prompt_box.setFixedHeight(62)
+        self.prompt_box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.prompt_box.textChanged.connect(self._params_changed)
+        area = QFrame()
+        column = QVBoxLayout(area)
+        column.setContentsMargins(2, 14, 2, 0)
+        column.setSpacing(6)
+        column.addWidget(label("Describe it", "heading"))
+        column.addWidget(self.prompt_box)
+        return area
 
     def _build_footer(self) -> QFrame:
         footer = QFrame()
@@ -189,6 +224,19 @@ class MainWindow(QMainWindow):
         enable_native_frame(self)
         style_native_window(self)
         exclude_from_capture(self, self.hide_capture.isChecked())
+        self._claim_capture_key()
+
+    def _claim_capture_key(self):
+        """Windows ties the shortcut to one window, and Keep on top can rebuild ours."""
+        window = int(self.winId())
+        if window == self._key_window:
+            return
+        if self._key_window:
+            release_capture_key(self._key_window)
+        claimed = claim_capture_key(window)
+        self._key_window = window if claimed else 0
+        if not claimed:
+            self._notice(f"{CAPTURE_KEY_NAME} is taken by another app")
 
     def changeEvent(self, event):
         if event.type() == QEvent.Type.WindowStateChange:
@@ -203,6 +251,9 @@ class MainWindow(QMainWindow):
         if bytes(event_type) != b"windows_generic_MSG":
             return False, 0
         msg = wintypes.MSG.from_address(int(message))
+        if msg.message == WM_HOTKEY and msg.wParam == CAPTURE_KEY_ID:
+            QTimer.singleShot(0, self.capture)  # it may open the folder picker, which can't happen in here
+            return True, 0
         if msg.message == WM_NCCALCSIZE:
             # Claim the whole frame for drawing, which hides the title bar. A maximised
             # window hangs off the screen edges, so pull it back in.
@@ -234,7 +285,6 @@ class MainWindow(QMainWindow):
         if not self._over_maximise():
             self._hover_check.stop()
             self.preview.maximise_button.set_hot(False)
-            self.preview.check_pointer()
 
     def _toggle_maximised(self):
         if self.isMaximized():
@@ -285,7 +335,8 @@ class MainWindow(QMainWindow):
 
     def capture(self):
         image = self.preview.current_image()  # taken first, so this is the frame that was on screen at the click
-        if image is None:
+        if not self.capture_button.isEnabled():  # the shortcut can arrive at any moment
+            self._notice("Nothing to capture yet" if image is None else "Turn on clipboard or folder first")
             return
         wants_file = self.to_folder.isChecked()
         has_folder = wants_file and (bool(self.capture_settings["folder"]) or self._choose_folder())
@@ -433,4 +484,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.stop()
         self.region_frame.close()
+        if self._key_window:
+            release_capture_key(self._key_window)
+            self._key_window = 0
         event.accept()

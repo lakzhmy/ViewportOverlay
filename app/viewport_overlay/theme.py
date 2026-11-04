@@ -35,6 +35,7 @@ STYLE_SHEET = f"""
 * {{ font-family: "{FONT}", "Segoe UI"; font-size: 14px; }}
 QMainWindow, QWidget#root {{ background: {PAPER_50}; }}
 QLabel {{ color: {GRAY_500}; background: transparent; font-size: 13px; }}
+QLabel#heading {{ color: {GRAY_400}; font-size: 13px; }}
 QLabel#stageTitle {{ color: {PAPER_50}; font-size: 24px; font-weight: 600; }}
 QLabel#stageHint {{ color: {PAPER_100}; font-size: 14px; }}
 QLabel#amount {{
@@ -45,9 +46,8 @@ QToolTip {{ background: {INK_800}; color: {PAPER_50}; border: 1px solid {INK_700
 
 QFrame#panel {{ background: {PAPER_50}; border-radius: 12px; }}
 QPlainTextEdit {{
-    background: transparent; color: {INK_900}; border: none; border-bottom: 1px solid {GRAY_300};
-    font-size: 15px; selection-background-color: {ORANGE}; selection-color: {INK_900};
+    background: transparent; color: {INK_700}; border: none;
+    font-size: 22px; selection-background-color: {ORANGE}; selection-color: {INK_900};
 }}
-QPlainTextEdit:focus {{ border-bottom-color: {ORANGE}; }}
 QPlainTextEdit:disabled {{ color: {GRAY_400}; }}
 """
