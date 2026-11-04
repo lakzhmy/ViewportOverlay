@@ -50,4 +50,15 @@ QPlainTextEdit {{
     font-size: 22px; selection-background-color: {ORANGE}; selection-color: {INK_900};
 }}
 QPlainTextEdit:disabled {{ color: {GRAY_400}; }}
+
+QPushButton#pill {{
+    background: {PAPER_50}; color: {INK_900}; border: none; border-radius: 17px;
+    padding: 0 16px; font-size: 13px; font-weight: 600;
+}}
+QPushButton#pill:hover {{ background: {PAPER_100}; }}
+QLineEdit {{
+    background: transparent; color: {INK_900}; border: none; border-bottom: 1px solid {GRAY_300};
+    padding: 2px 0; font-size: 13px; selection-background-color: {ORANGE}; selection-color: {INK_900};
+}}
+QLineEdit:focus {{ border-bottom-color: {INK_700}; }}
 """

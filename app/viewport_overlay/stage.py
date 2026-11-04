@@ -4,15 +4,20 @@ import math
 from PySide6.QtCore import QEasingCurve, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from .cloud import QUALITIES
 from .controls import LineButton, LogoButton, LookBox, Orb, Shutter, StrengthBar, WindowButton
 from .looks import LOOKS
 from .theme import INK_950, LIME, PAPER_50, STONE
@@ -23,6 +28,7 @@ RADIUS = 14
 POINTER_CHECK_MS = 100
 BAR_LONGEST = 300
 PANEL_GAP = 12
+PILL_GAP = 14
 SOLID_WINDOW = (0.32, 0.32, 0.56, 0.56)  # the logo's inner window, as shares of the mark
 REVEAL_MS = 560
 FLASH_MS = 260
@@ -39,30 +45,71 @@ def blurred(image: QImage, size: QSize) -> QImage:
 
 
 class LookPanel(QFrame):
-    """Opens from the orb: which look to render in."""
+    """Opens from the orb: which look to render in, and the Render final settings."""
 
     def __init__(self):
         super().__init__()
         self.setObjectName("panel")
         self.setFixedSize(320, 258)
         self.look_box = LookBox(LOOKS)
-        local = LineButton("Local")
-        local.setChecked(True)
-        local.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        cloud = LineButton("Cloud")
-        cloud.setEnabled(False)
-        cloud.setToolTip("Cloud looks aren't built yet")
+        self.local_tab = LineButton("Local")
+        self.local_tab.setChecked(True)
+        self.cloud_tab = LineButton("Cloud")
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.look_box)
+        self.pages.addWidget(self._build_cloud_page())
+        tab_group = QButtonGroup(self)
+        tab_group.addButton(self.local_tab)
+        tab_group.addButton(self.cloud_tab)
+        self.local_tab.toggled.connect(lambda local: self.pages.setCurrentIndex(0 if local else 1))
         tabs = QHBoxLayout()
         tabs.setSpacing(12)
-        tabs.addWidget(local)
-        tabs.addWidget(cloud)
+        tabs.addWidget(self.local_tab)
+        tabs.addWidget(self.cloud_tab)
         tabs.addStretch()
         column = QVBoxLayout(self)
         column.setContentsMargins(16, 14, 16, 12)
         column.setSpacing(10)
-        column.addWidget(self.look_box)
+        column.addWidget(self.pages)
         column.addStretch()
         column.addLayout(tabs)
+
+    def _build_cloud_page(self) -> QWidget:
+        note = QLabel("Render final sends what's inside your region and your description to fal.ai, "
+                      "and on to OpenAI. Each image costs money on your fal account.")
+        note.setWordWrap(True)
+        self.quality_buttons = {name: LineButton(name.capitalize()) for name in QUALITIES}
+        group = QButtonGroup(self)
+        quality = QHBoxLayout()
+        quality.setSpacing(12)
+        quality.addWidget(QLabel("Quality"))
+        for button in self.quality_buttons.values():
+            group.addButton(button)
+            quality.addWidget(button)
+        quality.addStretch()
+        self.key_box = QLineEdit()
+        self.key_box.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key_box.setPlaceholderText("Paste your fal.ai key")
+        self.key_button = LineButton("Save", switch=False)
+        key = QHBoxLayout()
+        key.setSpacing(10)
+        key.addWidget(self.key_box, 1)
+        key.addWidget(self.key_button)
+        page = QWidget()
+        column = QVBoxLayout(page)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(14)
+        column.addWidget(note)
+        column.addLayout(quality)
+        column.addLayout(key)
+        column.addStretch()
+        return page
+
+    def set_key_saved(self, saved: bool):
+        self.key_box.clear()
+        self.key_box.setEnabled(not saved)
+        self.key_box.setPlaceholderText("Key saved on this computer" if saved else "Paste your fal.ai key")
+        self.key_button.set_text("Forget" if saved else "Save")
 
     def mousePressEvent(self, event):
         event.accept()  # a click on the panel's background shouldn't count as clicking away
@@ -96,6 +143,11 @@ class Stage(QWidget):
         self.shutter = Shutter()
         self.orb = Orb()
         self.bar = StrengthBar()
+        self.final_pill = QPushButton()
+        self.final_pill.setObjectName("pill")
+        self.final_pill.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.final_pill.setFixedHeight(34)
+        self._final_shown = False
         self.minimise_button = WindowButton("minimise", "Minimise")
         self.maximise_button = WindowButton("maximise", "Maximise")
         self.close_button = WindowButton("close", "Close ViewportOverlay")
@@ -103,7 +155,7 @@ class Stage(QWidget):
         self.maximise_button.clicked.connect(self.maximise_clicked)
         self.close_button.clicked.connect(self.close_clicked)
         self.orb.clicked.connect(lambda: self.show_panel(True))
-        for widget in (self.logo, self.shutter, self.orb, self.bar):
+        for widget in (self.logo, self.shutter, self.orb, self.bar, self.final_pill):
             self._float(widget)
 
         self.amount = QLabel(self)
@@ -116,6 +168,7 @@ class Stage(QWidget):
         self.panel = LookPanel()
         self.panel.setParent(self)
         self.panel.hide()
+        self.final_pill.hide()
 
         self._fade = QVariantAnimation(self)
         self._fade.setDuration(180)
@@ -209,9 +262,20 @@ class Stage(QWidget):
         self.orb.setVisible(not shown)
         self._place_shutter()
 
+    def set_final(self, text: str, shown: bool):
+        """The pill beside the shutter: its price, the wait, or the way back to live."""
+        self.final_pill.setText(text)
+        self.final_pill.adjustSize()
+        self._final_shown = shown
+        self._place_shutter()
+
     def _place_shutter(self):
-        covered = self.panel.isVisibleTo(self) and self.panel.geometry().intersects(self.shutter.geometry())
+        panel_open = self.panel.isVisibleTo(self)
+        covered = panel_open and self.panel.geometry().intersects(self.shutter.geometry())
         self.shutter.setVisible(not covered)
+        pill = self.final_pill
+        pill.move(self.shutter.geometry().right() + PILL_GAP, self.shutter.geometry().center().y() - pill.height() // 2)
+        pill.setVisible(self._final_shown and not (panel_open and self.panel.geometry().intersects(pill.geometry())))
 
     def _peek_amount(self, shown: bool):
         self.amount.setVisible(shown)

@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtGui import QGuiApplication, QImage
 
 SETTINGS_FILE = Path(__file__).resolve().parents[1] / "settings.json"
-DEFAULTS = {"to_folder": True, "to_clipboard": True, "folder": ""}
+DEFAULTS = {"to_folder": True, "to_clipboard": True, "folder": "", "quality": "medium", "cloud_agreed": False}
 
 
 def load_settings() -> dict:

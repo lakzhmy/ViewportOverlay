@@ -40,6 +40,13 @@ class RenderWorker(QThread):
         self._dirty = True
         self._lock = threading.Lock()
         self._running = True
+        self._paused = False
+
+    def set_paused(self, paused: bool) -> None:
+        """Holds rendering with the model still loaded, so going back to live is instant."""
+        with self._lock:
+            self._paused = paused
+            self._dirty = True
 
     def set_region(self, region: dict) -> None:
         with self._lock:
@@ -67,8 +74,14 @@ class RenderWorker(QThread):
                 while self._running:
                     started = time.perf_counter()
                     with self._lock:
+                        paused = self._paused
                         region, params, dirty = self._region, self._params, self._dirty
-                        self._dirty = False
+                        if not paused:
+                            self._dirty = False
+
+                    if paused:
+                        time.sleep(1.0 / TARGET_FPS)
+                        continue
 
                     shot = capture.grab(region)
                     bgra = np.frombuffer(shot.bgra, np.uint8).reshape(shot.height, shot.width, 4)

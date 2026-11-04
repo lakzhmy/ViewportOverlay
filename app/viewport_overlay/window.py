@@ -1,4 +1,5 @@
 """The main window: a simple camera. Viewfinder on top, then the description and one line of options."""
+import time
 from ctypes import wintypes
 from pathlib import Path
 
@@ -10,12 +11,14 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPlainTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from .capture import copy_image, load_settings, save_image, save_settings
+from .cloud import FinalRender, estimate_price, forget_key, grab_region, load_key, save_key
 from .controls import Grip, LineButton
 from .engines import RenderParams
 from .region import RegionFrame, RegionPicker
@@ -36,6 +39,7 @@ from .screen import (
     style_native_window,
     to_physical,
 )
+from .looks import LOOKS
 from .stage import Stage
 from .theme import ASSETS, STYLE_SHEET, load_fonts
 from .worker import RenderWorker
@@ -43,11 +47,18 @@ from .worker import RenderWorker
 GRIP = 6
 CORNER = 14
 NOTICE_MS = 3000
+PROBLEM_MS = 8000
+WAIT_FOREVER_MS = 600000  # until the final arrives, fails or is cancelled
 MARGIN = 18
 STRIP = 30
 FOOTER = 44
 NO_FOLDER = "choose folder"
 FILTER_NOTE = "The Filter look doesn't use a description."
+CLOUD_NOTICE = (
+    "Render final sends what's inside your region and your description to fal.ai, and on to OpenAI, "
+    "to make the image. Each image costs money on your fal account.\n\n"
+    "Only send work you're allowed to share with them. Send this one?"
+)
 
 
 def label(text: str, name: str) -> QLabel:
@@ -99,6 +110,21 @@ class MainWindow(QMainWindow):
         self.follow_slider.valueChanged.connect(self._params_changed)
         self.look_box = self.preview.panel.look_box
         self.look_box.currentIndexChanged.connect(self._look_changed)
+        self._final = None
+        self._final_started = 0
+        self._holding = False
+        self._fal_key = load_key()
+        self._final_clock = QTimer(self)
+        self._final_clock.setInterval(1000)
+        self._final_clock.timeout.connect(self._refresh_final)
+        panel = self.preview.panel
+        self.preview.final_pill.clicked.connect(self._final_clicked)
+        panel.key_button.clicked.connect(self._key_clicked)
+        panel.key_box.returnPressed.connect(self._key_clicked)
+        panel.set_key_saved(bool(self._fal_key))
+        panel.quality_buttons[self.capture_settings["quality"]].setChecked(True)
+        for name, button in panel.quality_buttons.items():
+            button.clicked.connect(lambda checked=False, name=name: self._quality_chosen(name))
 
         root = QWidget()
         root.setObjectName("root")
@@ -305,9 +331,123 @@ class MainWindow(QMainWindow):
         if not self._notice_timer.isActive():
             self.status.setText(text)
 
-    def _notice(self, text: str):
+    def _notice(self, text: str, time_ms: int = NOTICE_MS):
         self.status.setText(text)
-        self._notice_timer.start()
+        self._notice_timer.start(time_ms)
+
+    def _key_clicked(self):
+        panel = self.preview.panel
+        if self._fal_key:
+            forget_key()
+            self._fal_key = ""
+        else:
+            key = panel.key_box.text().strip()
+            if not key:
+                return
+            try:
+                save_key(key)
+            except OSError:
+                self._notice("Couldn't save the key", PROBLEM_MS)
+                return
+            self._fal_key = key
+        panel.set_key_saved(bool(self._fal_key))
+        self._refresh_final()
+
+    def _quality_chosen(self, name: str):
+        self.capture_settings["quality"] = name
+        save_settings(self.capture_settings)
+        self._refresh_final()
+
+    def _refresh_final(self):
+        area = self.region_frame.area()
+        if self._final:
+            text = f"Cancel · {round(time.monotonic() - self._final_started)} s"
+        elif self._holding:
+            text = "Back to live"
+        elif area.isValid():
+            region = to_physical(area)
+            price = estimate_price(region["width"], region["height"], self.capture_settings["quality"])
+            text = f"Render final · ~${price:.2f}"
+        else:
+            text = ""
+        ready = bool(self._fal_key) and area.isValid()
+        self.preview.set_final(text, bool(self._final) or self._holding or ready)
+
+    def _final_clicked(self):
+        if self._final:
+            self._cancel_final()
+        elif self._holding:
+            self._leave_final()
+        else:
+            self.render_final()
+
+    def _agreed_to_cloud(self) -> bool:
+        if self.capture_settings["cloud_agreed"]:
+            return True
+        buttons = QMessageBox.StandardButton
+        answer = QMessageBox.question(self, "Render final", CLOUD_NOTICE, buttons.Yes | buttons.Cancel, buttons.Cancel)
+        if answer != buttons.Yes:
+            return False
+        self.capture_settings["cloud_agreed"] = True
+        save_settings(self.capture_settings)
+        return True
+
+    def render_final(self):
+        area = self.region_frame.area()
+        if self._final or not self._fal_key or not area.isValid() or not self._agreed_to_cloud():
+            return
+        look = self.look_box.currentData()
+        style = look.style if look.engine.uses_prompt else LOOKS[0].style
+        params = RenderParams(prompt=self.prompt_box.toPlainText().strip(), style=style)
+        self._final = FinalRender(self._fal_key, grab_region(to_physical(area)), params, self.capture_settings["quality"])
+        self._final.finished.connect(self._final_done)
+        self._final.failed.connect(self._final_failed)
+        self._final_started = time.monotonic()
+        self._final_clock.start()
+        self._final.start()
+        self._notice("Rendering final…", WAIT_FOREVER_MS)
+        self._refresh_final()
+
+    def _end_final(self):
+        job, self._final = self._final, None
+        self._final_clock.stop()
+        self._notice_timer.stop()
+        job.finished.disconnect(self._final_done)
+        job.failed.disconnect(self._final_failed)
+        return job
+
+    def _cancel_final(self):
+        self._end_final().cancel()
+        self._notice("Cancelled. It may still be charged if it had started", PROBLEM_MS)
+        self._refresh_final()
+
+    def _final_failed(self, message: str):
+        self._end_final()
+        self._notice(message, PROBLEM_MS)
+        self._refresh_final()
+
+    def _final_done(self, image: QImage):
+        """Shows the final and holds it there. It paid for itself, so it's saved straight away."""
+        self._end_final()
+        self._holding = self.region_frame.area().isValid()
+        if self.worker and self._holding:
+            self.worker.set_paused(True)
+        self.preview.show_image(image)
+        self.preview.set_live(False)
+        self.region_frame.set_live(False)
+        self._refresh_capture()
+        self._refresh_final()
+        self._say(f"Final · {image.width()} × {image.height()}")
+        if self.capture_button.isEnabled():
+            self.capture()
+
+    def _leave_final(self):
+        self._holding = False
+        if self.worker:
+            self.worker.set_paused(False)
+        elif self.region_frame.area().isValid():
+            self.start()
+        self._refresh_final()
 
     def _show_folder(self):
         folder = self.capture_settings["folder"]
@@ -397,6 +537,7 @@ class MainWindow(QMainWindow):
             self.worker.set_region(to_physical(area))
         else:
             self.start()
+        self._leave_final()
 
     def clear_region(self):
         """Stops rendering and drops the region. The last render stays up, so it can still be captured."""
@@ -405,10 +546,13 @@ class MainWindow(QMainWindow):
         self.logo.set_on(False)
         self.preview.show_start()
         self._say("Nothing selected yet")
+        self._holding = False
+        self._refresh_final()
 
     def _region_moved(self, area: QRect):
         if self.worker:
             self.worker.set_region(to_physical(area))
+        self._refresh_final()
 
     def _params_changed(self):
         if self.worker:
@@ -444,6 +588,7 @@ class MainWindow(QMainWindow):
         self.worker.idle.connect(self._show_idle)
         self.worker.failed.connect(self._show_failure)
         self.worker.loading.connect(self._show_loading)
+        self.worker.set_paused(self._holding)
         self.worker.start()
 
     def stop(self):
@@ -463,6 +608,8 @@ class MainWindow(QMainWindow):
         self.preview.set_waiting(message)
 
     def _show_frame(self, image: QImage, fps: float):
+        if self._holding:  # a frame that was already on its way when the final arrived
+            return
         self.preview.show_image(image)
         self._refresh_capture()
         self.preview.set_live(True)
@@ -472,6 +619,8 @@ class MainWindow(QMainWindow):
         self._say(f"Live · {self._rate}{image.width()} × {image.height()}")
 
     def _show_idle(self):
+        if self._holding:
+            return
         self.preview.set_live(False)
         self.region_frame.set_live(False)
         self._say("Paused until your screen changes")
@@ -482,6 +631,8 @@ class MainWindow(QMainWindow):
         self._say(f"Something went wrong: {message}")
 
     def closeEvent(self, event):
+        if self._final:
+            self._end_final().cancel()
         self.stop()
         self.region_frame.close()
         if self._key_window:
