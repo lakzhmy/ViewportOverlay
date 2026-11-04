@@ -72,7 +72,7 @@ magenta.close()
 
 # The real app: pick a region, run, change settings, move, stop.
 window = MainWindow()
-window.engine_box.setCurrentIndex(1)
+window.look_box.setCurrentIndex(4)
 window.move(screen.geometry().left() + 620, screen.geometry().top() + 100)
 window.show()
 frames = []
@@ -109,8 +109,9 @@ inner = window.region_frame.mask()
 centre = window.region_frame.rect().center()
 check("frame interior is click-through", not inner.contains(centre))
 
-window.toggle_running()
-check("stop works", window.worker is None and window.run_button.text() == "Start")
+window.clear_region()
+check("clearing stops rendering", window.worker is None)
+check("the last render stays on screen", window.preview.current_image() is not None)
 window.close()
 green.close()
 pump(0.2)

@@ -32,7 +32,7 @@ def drag(widget, start, end):
 
 
 window = MainWindow()
-window.engine_box.setCurrentIndex(1)
+window.look_box.setCurrentIndex(4)
 window.show()
 window.select_region()
 QTest.qWait(200)
@@ -69,21 +69,28 @@ window.select_region()
 QTest.qWait(100)
 QTest.keyClick(window.picker._layers[0], Qt.Key.Key_Escape)
 QTest.qWait(100)
-check("Esc keeps the old region", frame.isVisible() and window.select_button.isEnabled())
+check("Esc keeps the old region", frame.isVisible() and window.logo.isEnabled())
 
 # Closing the region without closing the app.
 QTest.mouseClick(frame, L, pos=frame.close_button().center())
 QTest.qWait(100)
 check("X closes the region", not frame.isVisible() and not frame.area().isValid())
 check("X stops rendering", window.worker is None)
-check("app stays open", window.isVisible() and window.select_button.text() == "Select region")
-check("buttons reset", not window.run_button.isEnabled() and not window.clear_button.isEnabled())
+check("app stays open", window.isVisible())
+check("the logo goes back to white", not window.logo.on)
 window._region_picked(QRect(300, 300, 400, 300))
 QTest.qWait(200)
 check("new region works after closing", frame.isVisible() and window.worker is not None)
-window.clear_button.click()
+check("the logo turns orange with a region", window.logo.on)
+window.logo.click()
 QTest.qWait(100)
-check("Clear region button works", not frame.isVisible() and window.worker is None)
+check("clicking the logo clears the region", not frame.isVisible() and window.worker is None and not window.logo.on)
+window.logo.click()
+QTest.qWait(200)
+check("clicking it again starts selecting", not window.logo.isEnabled() and window.picker._layers)
+QTest.keyClick(window.picker._layers[0], Qt.Key.Key_Escape)
+QTest.qWait(100)
+check("Esc leaves no region", window.logo.isEnabled() and not window.logo.on)
 
 # Second monitor and scaled-display maths.
 for screen in QGuiApplication.screens():

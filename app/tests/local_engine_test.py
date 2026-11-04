@@ -127,15 +127,15 @@ check("live speed is usable", fps >= 6, f"{fps:.1f} fps")
 window.grab().save(str(OUT / "app_window.png"))
 
 process = window.worker._engine._process
-window.toggle_running()
+window.stop()
 check("stop ends the AI program", process.poll() is not None)
 
 # Stopping during loading must not hang or leave anything running.
-window.toggle_running()
+window.start()
 pump(0.5)
 process = window.worker._engine._process
 started = time.time()
-window.toggle_running()
+window.stop()
 check("stop during load is quick", time.time() - started < 5, f"{time.time() - started:.1f} s")
 check("stop during load ends the AI program", process is None or process.poll() is not None)
 

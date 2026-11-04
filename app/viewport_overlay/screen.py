@@ -11,7 +11,7 @@ WDA_EXCLUDEFROMCAPTURE = 0x11
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWA_BORDER_COLOR = 34
 DWMWCP_ROUND = 2
-INK_700_COLORREF = 0x00423D3A  # Windows stores colours as blue, green, red
+PAPER_EDGE_COLORREF = 0x00BCB7B4  # Windows stores colours as blue, green, red
 GWL_STYLE = -16
 SNAP_STYLES = 0x00C00000 | 0x00040000 | 0x00080000 | 0x00020000 | 0x00010000  # caption, resize, menu, min, max
 SWP_REFRESH_FRAME = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020  # keep size, place and order; redo the frame
@@ -41,7 +41,7 @@ def style_native_window(widget) -> None:
     set_attribute = ctypes.windll.dwmapi.DwmSetWindowAttribute
     set_attribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
     hwnd = int(widget.winId())
-    for name, value in ((DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND), (DWMWA_BORDER_COLOR, INK_700_COLORREF)):
+    for name, value in ((DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND), (DWMWA_BORDER_COLOR, PAPER_EDGE_COLORREF)):
         data = ctypes.c_uint(value)
         set_attribute(hwnd, name, ctypes.byref(data), ctypes.sizeof(data))
 

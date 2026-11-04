@@ -1,68 +1,23 @@
-"""Small building blocks for the window: switches, swatches, the scale and resize grips."""
-from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QRadialGradient
-from PySide6.QtWidgets import (
-    QAbstractButton,
-    QButtonGroup,
-    QCheckBox,
-    QHBoxLayout,
-    QPushButton,
-    QSlider,
-    QWidget,
-)
+"""The camera's parts: logo, shutter, orb, strength bar, text switches and resize grips."""
+from PySide6.QtCore import QByteArray, QPointF, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QRadialGradient
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtWidgets import QAbstractButton, QButtonGroup, QGridLayout, QSlider, QWidget
 
-from .theme import (
-    FONT,
-    GRAY_300,
-    GRAY_400,
-    GRAY_500,
-    INK_700,
-    INK_800,
-    INK_900,
-    INK_950,
-    ORANGE,
-    PAPER_100,
-    PAPER_50,
-)
+from .theme import ASSETS, FONT, GRAY_400, GRAY_500, INK_700, INK_900, ORANGE, PAPER_50
 
 
-class Segmented(QWidget):
-    """A row of buttons where exactly one is selected."""
-
-    currentIndexChanged = Signal(int)
-
-    def __init__(self, name: str, items: list, spacing: int = 0, margin: int = 0, make=None):
-        super().__init__()
-        self.setObjectName(name)
-        self._data = [data for _, data in items]
-        self._labels = [text for text, _ in items]
-        self._group = QButtonGroup(self)
-        row = QHBoxLayout(self)
-        row.setContentsMargins(margin, margin, margin, margin)
-        row.setSpacing(spacing)
-        for index, text in enumerate(self._labels):
-            button = make(text, index) if make else QPushButton(text)
-            button.setCheckable(True)
-            button.setChecked(index == 0)
-            self._group.addButton(button, index)
-            row.addWidget(button)
-        self._group.idToggled.connect(self._toggled)
-
-    def _toggled(self, index: int, checked: bool):
-        if checked:
-            self.currentIndexChanged.emit(index)
-
-    def setCurrentIndex(self, index: int):
-        self._group.button(index).setChecked(True)
-
-    def currentIndex(self) -> int:
-        return self._group.checkedId()
-
-    def currentData(self):
-        return self._data[self.currentIndex()]
-
-    def currentText(self) -> str:
-        return self._labels[self.currentIndex()]
+def paint_orb(painter: QPainter, area: QRectF, colors: tuple):
+    """A soft glossy ball in the look's colours."""
+    highlight, body, edge = colors
+    radius = area.width() / 2
+    glow = QRadialGradient(area.center(), radius * 1.1, area.center() + QPointF(radius * 0.3, -radius * 0.25))
+    glow.setColorAt(0.0, QColor(highlight))
+    glow.setColorAt(0.5, QColor(body))
+    glow.setColorAt(1.0, QColor(edge))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(glow)
+    painter.drawEllipse(area)
 
 
 class WindowButton(QAbstractButton):
@@ -114,220 +69,254 @@ class WindowButton(QAbstractButton):
             painter.drawLine(QPointF(middle - 5, middle), QPointF(middle + 5, middle))
 
 
-class Dot(QWidget):
-    """The 8 px status light."""
+class LogoButton(QAbstractButton):
+    """The logo is the region button. Its inner window turns orange while a region is selected."""
+
+    SIZE = 56
 
     def __init__(self):
         super().__init__()
-        self.setFixedSize(8, 8)
-        self._color = QColor(GRAY_500)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        art = (ASSETS / "mark-color-on-dark.svg").read_text(encoding="utf-8")
+        self._on_art = QSvgRenderer(QByteArray(art.encode()), self)
+        self._off_art = QSvgRenderer(QByteArray(art.replace(ORANGE, PAPER_50).encode()), self)
+        self.on = False
 
-    def set_color(self, color: str):
-        self._color = QColor(color)
+    def set_on(self, on: bool):
+        self.on = on
+        self.setToolTip("Clear the region" if on else "Select a region")
         self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self._color)
-        painter.drawEllipse(self.rect())
+        area = QRectF(self.rect())
+        shade = QRadialGradient(area.center(), area.width() / 2)  # keeps the white logo readable on pale renders
+        shade.setColorAt(0.0, QColor(10, 11, 12, 120 if self.underMouse() else 80))
+        shade.setColorAt(0.7, QColor(10, 11, 12, 50))
+        shade.setColorAt(1.0, QColor(10, 11, 12, 0))
+        painter.fillRect(area, shade)
+        (self._on_art if self.on else self._off_art).render(painter, area)
 
 
-class Swatch(QAbstractButton):
-    """A small material sample. The drawings are stand-ins until real sample renders exist."""
+class Shutter(QAbstractButton):
+    """A hollow ring, like a phone camera's shutter button."""
 
-    WIDTH = 68
-    TILE = 64
+    SIZE = 62
 
-    def __init__(self, text: str, index: int):
+    def __init__(self):
         super().__init__()
-        self.setText(text)
-        self._index = index
-        self.setFixedSize(self.WIDTH, self.TILE + 24)
+        self.setFixedSize(self.SIZE, self.SIZE)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
 
-    def _sphere(self, painter, tile, light, dark, shine):
-        centre = QPointF(tile.center())
-        glow = QRadialGradient(centre + QPointF(-7, -8), 28)
-        glow.setColorAt(0.0, QColor(light))
-        glow.setColorAt(1.0, QColor(dark))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(glow)
-        painter.drawEllipse(centre, 19, 19)
-        if shine:
-            painter.setBrush(QColor(PAPER_50))
-            painter.drawEllipse(centre + QPointF(-7, -8), 3.5, 2.5)
-
-    def _marker(self, painter, tile):
-        pen = QPen(QColor(INK_900), 2.5)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        left, top = tile.left(), tile.top()
-        for lift in (0, 11):
-            stroke = QPainterPath(QPointF(left + 13, top + 44 - lift))
-            stroke.cubicTo(left + 24, top + 8 - lift, left + 38, top + 58 - lift, left + 51, top + 22 - lift)
-            painter.drawPath(stroke)
-
-    def _studio(self, painter, tile):
-        left, top = tile.left(), tile.top()
-        cone = QPainterPath(QPointF(left + 32, top))
-        cone.lineTo(left + 58, top + 64)
-        cone.lineTo(left + 6, top + 64)
-        cone.closeSubpath()
-        painter.fillPath(cone, QColor(INK_700))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(PAPER_100))
-        painter.drawEllipse(QPointF(left + 32, top + 44), 11, 11)
+    def hitButton(self, point) -> bool:
+        offset = QPointF(point) - QRectF(self.rect()).center()
+        return offset.x() ** 2 + offset.y() ** 2 <= (self.SIZE / 2) ** 2
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        tile = QRect((self.WIDTH - self.TILE) // 2, 2, self.TILE, self.TILE)
-        shape = QPainterPath()
-        shape.addRoundedRect(QRectF(tile), 12, 12)
-        marker = self._index == 2
-        base = PAPER_100 if marker else (INK_950 if self._index == 3 else INK_800)
-        painter.fillPath(shape, QColor(base))
-        painter.save()
-        painter.setClipPath(shape)
-        if self._index == 0:
-            self._sphere(painter, tile, PAPER_50, INK_950, True)
-        elif self._index == 1:
-            self._sphere(painter, tile, PAPER_100, GRAY_500, False)
-        elif marker:
-            self._marker(painter, tile)
-        else:
-            self._studio(painter, tile)
-        painter.restore()
+        painter.setOpacity(1.0 if self.isEnabled() else 0.4)
+        area = QRectF(self.rect())
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        if self.isChecked():
-            painter.setPen(QPen(QColor(ORANGE), 2))
-            painter.drawRoundedRect(QRectF(tile).adjusted(-1, -1, 1, 1), 13, 13)
-        elif self.underMouse():
-            painter.setPen(QPen(QColor(GRAY_500), 1))
-            painter.drawPath(shape)
-        font = QFont(FONT)
-        font.setPixelSize(13)
-        painter.setFont(font)
-        painter.setPen(QColor(PAPER_50 if self.isChecked() else GRAY_400))
-        painter.drawText(QRect(0, self.TILE + 6, self.WIDTH, 18), Qt.AlignmentFlag.AlignCenter, self.text())
+        painter.setPen(QPen(QColor(10, 11, 12, 70), 6))  # a dark casing so the ring reads on pale renders
+        painter.drawEllipse(area.adjusted(4, 4, -4, -4))
+        painter.setPen(QPen(QColor(PAPER_50), 4))
+        painter.drawEllipse(area.adjusted(4, 4, -4, -4))
+        if self.isEnabled() and (self.isDown() or self.underMouse()):
+            fill = QColor(PAPER_50)
+            fill.setAlphaF(0.95 if self.isDown() else 0.4)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawEllipse(area.adjusted(11, 11, -11, -11))
 
 
-class Scale(QSlider):
-    """A ruled scale, read like a measuring tool. Clicking jumps straight to that mark."""
+class Orb(QAbstractButton):
+    """Shows the current look. Clicking it opens the look panel."""
 
-    INSET = 8
+    SIZE = 62
 
     def __init__(self):
-        super().__init__(Qt.Orientation.Horizontal)
-        self.setFixedHeight(40)
+        super().__init__()
+        self.setFixedSize(self.SIZE, self.SIZE)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Change the look")
+        self._colors = None
 
-    def _x(self, value: int) -> float:
-        span = self.width() - 2 * self.INSET
-        return self.INSET + span * (value - self.minimum()) / (self.maximum() - self.minimum())
+    def set_colors(self, colors: tuple):
+        self._colors = colors
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        area = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        paint_orb(painter, area, self._colors)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(10, 11, 12, 60), 1))
+        painter.drawEllipse(area)
+
+
+class LookButton(QAbstractButton):
+    """One look in the panel: a small orb and its name."""
+
+    def __init__(self, look):
+        super().__init__()
+        self.setText(look.label)
+        self._colors = look.colors
+        self.setCheckable(True)
+        self.setFixedSize(138, 44)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        area = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        if self.isChecked():
+            painter.setPen(QPen(QColor(GRAY_500), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(area, 12, 12)
+        paint_orb(painter, QRectF(7, 5, 34, 34), self._colors)
+        font = QFont(FONT)
+        font.setPixelSize(14)
+        painter.setFont(font)
+        painter.setPen(QColor(INK_900 if self.isChecked() or self.underMouse() else GRAY_500))
+        painter.drawText(self.rect().adjusted(50, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, self.text())
+
+
+class LookBox(QWidget):
+    """The looks, filling one column before starting the next. Exactly one is selected."""
+
+    currentIndexChanged = Signal(int)
+
+    def __init__(self, looks: list, rows: int = 4):
+        super().__init__()
+        self._looks = looks
+        self._group = QButtonGroup(self)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(4)
+        for index, look in enumerate(looks):
+            button = LookButton(look)
+            button.setChecked(index == 0)
+            self._group.addButton(button, index)
+            grid.addWidget(button, index % rows, index // rows)
+        self._group.idToggled.connect(self._toggled)
+
+    def _toggled(self, index: int, checked: bool):
+        if checked:
+            self.currentIndexChanged.emit(index)
+
+    def setCurrentIndex(self, index: int):
+        self._group.button(index).setChecked(True)
+
+    def currentIndex(self) -> int:
+        return self._group.checkedId()
+
+    def currentData(self):
+        return self._looks[self.currentIndex()]
+
+
+class StrengthBar(QSlider):
+    """How closely the render follows your drawing. Strict is at the top."""
+
+    WIDTH = 26
+    peek = Signal(bool)  # True while the number should show
+
+    def __init__(self):
+        super().__init__(Qt.Orientation.Vertical)
+        self.setFixedWidth(self.WIDTH)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        self.setToolTip("Follow my drawing: Strict at the top, Loose at the bottom")
+        self._dragging = False
+
+    def dot_y(self) -> float:
+        radius = self.WIDTH / 2
+        share = (self.value() - self.minimum()) / (self.maximum() - self.minimum())
+        return radius + (self.height() - self.WIDTH) * (1 - share)
 
     def _follow(self, event):
-        span = self.width() - 2 * self.INSET
-        share = (event.position().x() - self.INSET) / span
+        radius = self.WIDTH / 2
+        share = 1 - (event.position().y() - radius) / (self.height() - self.WIDTH)
         self.setValue(round(self.minimum() + share * (self.maximum() - self.minimum())))
 
+    def enterEvent(self, event):
+        self.peek.emit(True)
+
+    def leaveEvent(self, event):
+        if not self._dragging:
+            self.peek.emit(False)
+
     def mousePressEvent(self, event):
+        self._dragging = True
         self._follow(event)
 
     def mouseMoveEvent(self, event):
         self._follow(event)
 
     def mouseReleaseEvent(self, event):
-        pass
+        self._dragging = False
+        self.peek.emit(self.rect().contains(event.position().toPoint()))
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(GRAY_500), 1.25))
-        for value in range(self.minimum(), self.maximum() + 1, 5):
-            tall = value % 25 == 0
-            x = self._x(value)
-            painter.drawLine(QPointF(x, 4 if tall else 9), QPointF(x, 17))
-        track = 27
-        line = QPen(QColor(INK_700), 3)
-        line.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(line)
-        painter.drawLine(QPointF(self.INSET, track), QPointF(self.width() - self.INSET, track))
-        line.setColor(QColor(ORANGE))
-        painter.setPen(line)
-        x = self._x(self.value())
-        painter.drawLine(QPointF(self.INSET, track), QPointF(x, track))
+        radius = self.WIDTH / 2
+        track = QColor(PAPER_50)
+        track.setAlphaF(0.9)
+        painter.setPen(QPen(QColor(10, 11, 12, 50), 1))
+        painter.setBrush(track)
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(PAPER_50))
-        painter.drawRoundedRect(QRectF(x - 6, track - 10, 12, 20), 4, 4)
+        painter.setBrush(QColor(ORANGE))
+        painter.drawEllipse(QPointF(radius, self.dot_y()), radius, radius)
 
 
-class Toggle(QCheckBox):
-    """An on/off switch with its label beside it."""
+class LineButton(QAbstractButton):
+    """Text in the bottom line. Underlined means on. A long text shortens from the left."""
 
-    TRACK = QSize(30, 18)
+    LONGEST = 200
 
-    def sizeHint(self) -> QSize:
-        width = self.fontMetrics().horizontalAdvance(self.text())
-        return QSize(self.TRACK.width() + 8 + width + 2, 22)
-
-    def hitButton(self, point) -> bool:
-        return self.rect().contains(point)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        top = (self.height() - self.TRACK.height()) / 2
-        track = QRectF(0, top, self.TRACK.width(), self.TRACK.height())
-        on = self.isChecked()
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(PAPER_50 if on else INK_800))
-        painter.drawRoundedRect(track, 9, 9)
-        painter.setBrush(QColor(INK_900 if on else GRAY_400))
-        painter.drawEllipse(QPointF(track.right() - 9 if on else track.left() + 9, track.center().y()), 6, 6)
-        painter.setPen(QColor(GRAY_300))
-        area = self.rect().adjusted(self.TRACK.width() + 8, 0, 0, 0)
-        painter.drawText(area, Qt.AlignmentFlag.AlignVCenter, self.text())
-
-
-class FolderButton(QPushButton):
-    """Shows the chosen folder's name. A long name shortens with "…" instead of pushing other controls."""
-
-    PADDING = 10
-    LONGEST = 220
-    SHORTEST = 70
-
-    def __init__(self):
+    def __init__(self, text: str = "", switch: bool = True, shortest: int = 0):
         super().__init__()
-        self.setObjectName("folder")
+        self.setText(text)
+        self.setCheckable(switch)
+        self._shortest = shortest
+        self._font = QFont(FONT)
+        self._font.setPixelSize(13)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._name = ""
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
 
-    def set_name(self, name: str):
-        self._name = name
+    def set_text(self, text: str):
+        self.setText(text)
         self.updateGeometry()
-        self._fit()
+        self.update()
 
-    def _fit(self):
-        self.ensurePolished()
-        room = self.width() - self.PADDING
-        self.setText(self.fontMetrics().elidedText(self._name, Qt.TextElideMode.ElideMiddle, room))
+    def shown_text(self) -> str:
+        return QFontMetrics(self._font).elidedText(self.text(), Qt.TextElideMode.ElideLeft, self.width())
 
     def sizeHint(self) -> QSize:
-        self.ensurePolished()
-        width = self.fontMetrics().horizontalAdvance(self._name) + self.PADDING + 2
-        return QSize(min(width, self.LONGEST), 22)
+        return QSize(min(QFontMetrics(self._font).horizontalAdvance(self.text()) + 2, self.LONGEST), 22)
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(self.SHORTEST, 22)
+        return QSize(self._shortest, 22) if self._shortest else self.sizeHint()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._fit()
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setFont(self._font)
+        on = self.isEnabled() and (self.isChecked() or not self.isCheckable())
+        color = QColor(GRAY_400 if not self.isEnabled() else INK_900 if self.underMouse() else INK_700 if on else GRAY_500)
+        painter.setPen(color)
+        painter.drawText(QRect(0, 0, self.width(), 19), Qt.AlignmentFlag.AlignVCenter, self.shown_text())
+        if on:
+            painter.setPen(QPen(color, 1))
+            painter.drawLine(QPointF(0, 20.5), QPointF(self.width(), 20.5))
 
 
 class Grip(QWidget):

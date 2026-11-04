@@ -104,13 +104,11 @@ pump(0.5)
 
 check("Capture is unavailable before there is a render", not window.capture_button.isEnabled())
 check("both switches start on", window.to_folder.isChecked() and window.to_clipboard.isChecked())
-check("the folder row invites a choice", "Choose folder" in window.folder_button.text(), window.folder_button.text())
+check("the folder row invites a choice", "choose folder" in window.folder_button.text(), window.folder_button.text())
 
 first = render(1)
-window.preview.live_card.show()
 window._show_frame(first, 10.0)
 pump(0.8)
-window._place_seam()
 check("Capture becomes available with a render", window.capture_button.isEnabled())
 
 click_capture(window)
@@ -127,7 +125,7 @@ pump(0.1)
 check("the message survives the next frames", window.status.text() == "Saved and copied", window.status.text())
 check("the folder name is shown", "Renders 2026" in window.folder_button.text(), window.folder_button.text())
 pump(3.1)
-check("the status goes back to normal afterwards", window.status.text() == "Rendering", window.status.text())
+check("the status goes back to normal afterwards", window.status.text().startswith("Live · 10 fps"), window.status.text())
 
 before = saved[0].read_bytes()
 second = render(3)
@@ -194,26 +192,31 @@ check("the folder name opens the picker and changes the folder", window.capture_
 # Tight window: a one-third tile at its smallest.
 window.resize(640, 600)
 pump(0.5)
-window._place_seam()
 check("the window still reaches its smallest size", window.width() == 640 and window.height() == 600, str(window.size()))
 check("the render keeps its minimum height", window.preview.height() >= 240, str(window.preview.height()))
-check("a long folder name shortens", "…" in window.folder_button.text(), window.folder_button.text())
-inside = window.to_clipboard.mapTo(window, window.to_clipboard.rect().bottomRight())
-check("the swatch labels are not cut off", window.style_box.height() >= window.style_box.sizeHint().height(), str(window.style_box.height()))
-check("the capture row fits", inside.x() < window.width() - 20, str(inside))
-check("the button group fits", window.seam.x() > 0 and window.seam.geometry().right() < window.width(), str(window.seam.geometry()))
+check("a long folder name shortens", "…" in window.folder_button.shown_text(), window.folder_button.shown_text())
+inside = window.folder_button.mapTo(window, window.folder_button.rect().bottomRight())
+check("the bottom line fits", inside.x() < window.status.mapTo(window, window.status.rect().topLeft()).x(), str(inside))
+check("the status keeps some room", window.status.width() >= 120, str(window.status.width()))
+window.preview.show_panel(True)
+pump(0.2)
+panel = window.preview.panel
+check("the look panel fits the small window", window.preview.rect().contains(panel.geometry()), str(panel.geometry()))
+check("the bar stays clear of the panel", window.preview.bar.geometry().bottom() < panel.y(), str(window.preview.bar.geometry()))
+if OUT:
+    window.grab().save(str(OUT / "capture_narrow_panel.png"))
+window.preview.show_panel(False)
 if OUT:
     window.grab().save(str(OUT / "capture_narrow.png"))
 window.resize(1040, 800)
 pump(0.4)
-window._place_seam()
 if OUT:
     window.preview.set_chrome(1.0)
     window.grab().save(str(OUT / "capture_wide.png"))
 
-# Clear removes the render, so there's nothing left to capture.
+# Clearing the region keeps the last render on screen.
 window.clear_region()
-check("Clear makes Capture unavailable", not window.capture_button.isEnabled())
+check("the last render can still be captured after clearing", window.capture_button.isEnabled())
 
 # Everything is remembered next time.
 window.to_clipboard.setChecked(False)
