@@ -16,7 +16,7 @@ from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtWidgets import QApplication, QWidget
 
-from viewport_overlay.screen import GWL_STYLE, SNAP_STYLES, to_physical
+from viewport_overlay.screen import GWL_EXSTYLE, GWL_STYLE, SNAP_STYLES, WS_EX_TOPMOST, to_physical
 from viewport_overlay.window import MainWindow
 
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
@@ -127,6 +127,7 @@ style = user32.GetWindowLongPtrW(ctypes.c_void_p(hwnd), GWL_STYLE)
 check("styles survive Keep on top", style & SNAP_STYLES == SNAP_STYLES)
 
 # Drag to the left edge: Windows should tile it to the left half.
+own_size = window.size()
 grab_point = window.mapToGlobal(QPoint(260, 120))
 real_drag(grab_point, QPoint(work.left() + 1, work.center().y()))
 dismiss_snap_assist()
@@ -136,10 +137,34 @@ check("dragging to the left edge tiles to half the screen",
       abs(geometry.left() - work.left()) < 12 and abs(geometry.width() - half) < 24
       and abs(geometry.height() - work.height()) < 24, str(geometry))
 
-# Drag away: it should go back to its own size.
+# Keep on top must leave the tile alone, in both directions.
+def on_top_now():
+    return bool(user32.GetWindowLongPtrW(ctypes.c_void_p(int(window.winId())), GWL_EXSTYLE) & WS_EX_TOPMOST)
+
+
+tiled = window.frameGeometry()
+hwnd = int(window.winId())
+check("Keep on top starts on", on_top_now())
+window.on_top.setChecked(False)
+pump(0.4)
+check("turning it off reaches Windows", not on_top_now())
+check("turning it off keeps the tile", window.frameGeometry() == tiled, str(window.frameGeometry()))
+check("turning it off doesn't rebuild the window", int(window.winId()) == hwnd)
+window.showMinimized()
+pump(0.4)
+user32.ShowWindow(ctypes.c_void_p(hwnd), 9)  # the way Windows restores it from the taskbar
+pump(0.5)
+check("it stays off after minimising", not on_top_now())
+check("the tile comes back after minimising", window.frameGeometry() == tiled, str(window.frameGeometry()))
+window.on_top.setChecked(True)
+pump(0.4)
+check("turning it on reaches Windows", on_top_now())
+check("turning it on keeps the tile", window.frameGeometry() == tiled, str(window.frameGeometry()))
+
+# Drag away: it should go back to its own size. Windows only does this for a window that's still snapped.
 real_drag(window.mapToGlobal(QPoint(260, 120)), QPoint(work.left() + 700, work.top() + 300))
 pump(0.3)
-check("dragging away restores the size", window.width() < half, str(window.frameGeometry()))
+check("dragging away restores the size", window.size() == own_size, f"{window.size()} wanted {own_size}")
 window.resize(1040, 800)
 window.move(work.left() + 300, work.top() + 120)
 pump(0.3)

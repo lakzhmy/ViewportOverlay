@@ -22,6 +22,11 @@ WM_NCHITTEST = 0x0084
 WM_NCLBUTTONDOWN = 0x00A1
 WM_NCLBUTTONUP = 0x00A2
 HTMAXBUTTON = 9
+GWL_EXSTYLE = -20
+WS_EX_TOPMOST = 0x00000008
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+SWP_ONLY_ORDER = 0x0001 | 0x0002 | 0x0010  # keep size and place, and don't take the focus
 WM_HOTKEY = 0x0312
 CAPTURE_KEY_ID = 1
 CAPTURE_KEY_NAME = "Ctrl+Alt+C"
@@ -70,6 +75,16 @@ def enable_native_frame(widget) -> None:
     if style & SNAP_STYLES != SNAP_STYLES:
         user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style | SNAP_STYLES)
         user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_REFRESH_FRAME)
+
+
+def set_always_on_top(widget, on_top: bool) -> None:
+    """Changes this on the window as it is. Qt's own switch rebuilds the window, which loses its snapped tile."""
+    if sys.platform != "win32":
+        return
+    set_position = ctypes.windll.user32.SetWindowPos
+    set_position.argtypes = [wintypes.HWND, wintypes.HWND] + [ctypes.c_int] * 4 + [wintypes.UINT]
+    order = HWND_TOPMOST if on_top else HWND_NOTOPMOST
+    set_position(int(widget.winId()), order, 0, 0, 0, 0, SWP_ONLY_ORDER)
 
 
 def maximised_inset(hwnd: int) -> int:

@@ -1,6 +1,6 @@
 """The camera's parts: logo, shutter, orb, strength bar, text switches and resize grips."""
 from PySide6.QtCore import QByteArray, QPointF, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPen, QRadialGradient
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QRadialGradient
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QAbstractButton, QButtonGroup, QGridLayout, QSlider, QWidget
 
@@ -69,19 +69,22 @@ class WindowButton(QAbstractButton):
 
 
 class LogoButton(QAbstractButton):
-    """The logo is the region button. Its inner window turns orange while a region is selected."""
+    """The logo is the region button. Its inner window turns orange while a region is selected.
 
-    SIZE = 56
-    EDGE_OFFSETS = [(x, y) for x in (-1, 0, 1) for y in (-1, 0, 1) if x or y]
+    It sits on a glass tile, which the viewfinder paints because the tile shows the render behind it.
+    """
+
+    SIZE = 64
+    ART_INSET = 6
 
     def __init__(self):
         super().__init__()
         self.setFixedSize(self.SIZE, self.SIZE)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
         art = (ASSETS / "mark-color-on-dark.svg").read_text(encoding="utf-8")
         self._on_art = QSvgRenderer(QByteArray(art.encode()), self)
         self._off_art = QSvgRenderer(QByteArray(art.replace(ORANGE, PAPER_50).encode()), self)
-        self._pictures = {}
         self.on = False
 
     def set_on(self, on: bool):
@@ -89,37 +92,12 @@ class LogoButton(QAbstractButton):
         self.setToolTip("Clear the region" if on else "Select a region")
         self.update()
 
-    def _blank(self, scale: float) -> QImage:
-        image = QImage(self.size() * scale, QImage.Format.Format_ARGB32_Premultiplied)
-        image.fill(Qt.GlobalColor.transparent)
-        return image
-
-    def _picture(self, scale: float) -> QImage:
-        """The logo with a crisp dark edge, so it stays white and still reads on pale renders."""
-        key = (self.on, scale)
-        if key not in self._pictures:
-            art = self._blank(scale)
-            painter = QPainter(art)
-            (self._on_art if self.on else self._off_art).render(painter)
-            painter.end()
-            edge = art.copy()
-            painter = QPainter(edge)
-            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-            painter.fillRect(edge.rect(), QColor(10, 11, 12, 170))
-            painter.end()
-            picture = self._blank(scale)
-            painter = QPainter(picture)
-            for x, y in self.EDGE_OFFSETS:
-                painter.drawImage(round(x * scale), round(y * scale), edge)
-            painter.drawImage(0, 0, art)
-            painter.end()
-            self._pictures[key] = picture
-        return self._pictures[key]
-
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawImage(self.rect(), self._picture(self.devicePixelRatioF()))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        inset = self.ART_INSET
+        area = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
+        (self._on_art if self.on else self._off_art).render(painter, area)
 
 
 class Shutter(QAbstractButton):

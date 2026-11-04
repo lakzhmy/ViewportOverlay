@@ -2,7 +2,7 @@
 import math
 
 from PySide6.QtCore import QEasingCurve, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QCursor, QImage, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -29,6 +29,9 @@ POINTER_CHECK_MS = 100
 BAR_LONGEST = 300
 PANEL_GAP = 12
 PILL_GAP = 14
+GLASS_RADIUS = 18
+GLASS_TINT = QColor(70, 72, 76, 72)  # grey, so the white logo still reads on pale renders
+GLASS_TINT_HOVER = QColor(70, 72, 76, 105)
 SOLID_WINDOW = (0.32, 0.32, 0.56, 0.56)  # the logo's inner window, as shares of the mark
 REVEAL_MS = 560
 FLASH_MS = 260
@@ -127,6 +130,7 @@ class Stage(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._image = None
         self._frame = None
+        self._glass = None
         self._floating = []
         self._live = False
         self._pulse = 0.0
@@ -293,6 +297,7 @@ class Stage(QWidget):
             effect.setEnabled(value < 1.0)
             effect.setOpacity(value)
             effect.parent().update()
+        self.update()  # the glass tile is painted here, so it fades with the rest
 
     def _fade_to(self, value: float):
         self._fade.stop()
@@ -325,6 +330,34 @@ class Stage(QWidget):
         painter.drawImage(target, self._image)
         painter.end()
         self._frame = frame
+        scale = self.devicePixelRatioF()
+        tile = self.logo.geometry()
+        patch = frame.copy(QRect(round(tile.x() * scale), round(tile.y() * scale),
+                                 round(tile.width() * scale), round(tile.height() * scale)))
+        self._glass = blurred(patch, patch.size())
+
+    def _paint_glass(self, painter: QPainter):
+        """The logo's tile: the render behind it blurred, a faint tint, a soft shine and a bright hairline."""
+        area = QRectF(self.logo.geometry())
+        tile = QPainterPath()
+        tile.addRoundedRect(area, GLASS_RADIUS, GLASS_RADIUS)
+        painter.save()
+        painter.setOpacity(self._chrome)
+        painter.setClipPath(tile, Qt.ClipOperation.IntersectClip)
+        if self._glass is not None:
+            painter.drawImage(area, self._glass)
+        painter.fillPath(tile, GLASS_TINT_HOVER if self.logo.underMouse() else GLASS_TINT)
+        shine = QLinearGradient(area.topLeft(), area.bottomLeft())
+        shine.setColorAt(0.0, QColor(255, 255, 255, 60))
+        shine.setColorAt(0.5, QColor(255, 255, 255, 0))
+        painter.fillPath(tile, shine)
+        painter.restore()
+        painter.save()
+        painter.setOpacity(self._chrome)
+        painter.setPen(QPen(QColor(255, 255, 255, 120), 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(area.adjusted(0.5, 0.5, -0.5, -0.5), GLASS_RADIUS, GLASS_RADIUS)
+        painter.restore()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -340,6 +373,8 @@ class Stage(QWidget):
                 painter.setClipPath(self._reveal_shape().intersected(shape))
             painter.drawImage(self.rect(), self._frame)
             painter.setClipPath(shape)
+        if self._chrome > 0:
+            self._paint_glass(painter)
         if self._flash > 0:
             wash = QColor(PAPER_50)
             wash.setAlphaF(self._flash)

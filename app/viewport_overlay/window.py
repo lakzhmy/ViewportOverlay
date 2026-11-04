@@ -36,6 +36,7 @@ from .screen import (
     exclude_from_capture,
     maximised_inset,
     release_capture_key,
+    set_always_on_top,
     style_native_window,
     to_physical,
 )
@@ -250,10 +251,11 @@ class MainWindow(QMainWindow):
         enable_native_frame(self)
         style_native_window(self)
         exclude_from_capture(self, self.hide_capture.isChecked())
+        set_always_on_top(self, self.on_top.isChecked())
         self._claim_capture_key()
 
     def _claim_capture_key(self):
-        """Windows ties the shortcut to one window, and Keep on top can rebuild ours."""
+        """Windows ties the shortcut to one window, so it has to follow if that window is ever rebuilt."""
         window = int(self.winId())
         if window == self._key_window:
             return
@@ -572,8 +574,7 @@ class MainWindow(QMainWindow):
             self.start()
 
     def _set_on_top(self, on_top: bool):
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on_top)
-        self.show()
+        set_always_on_top(self, on_top)
 
     def _set_capture_hidden(self, hidden: bool):
         exclude_from_capture(self, hidden)
