@@ -31,3 +31,6 @@ secrets.*
 # Brand source files (the app keeps its own copies in app/assets)
 ViewportOverlay-brand/
 StreamDiffusionTest/Claude outputs/
+
+# Client and reference images stay on this computer
+app/reference/
