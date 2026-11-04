@@ -1,14 +1,21 @@
 """Drawing the capture region, and the frame that shows, moves and resizes it."""
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPen, QRegion
+from PySide6.QtGui import QBitmap, QColor, QFont, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from .screen import exclude_from_capture
+from .theme import FONT, INK_900, ORANGE
 
-ACCENT = QColor("#FFB020")
-BORDER = 6
+ACCENT = QColor(ORANGE)
+INK = QColor(INK_900)
+DIM = QColor(10, 11, 12, 115)
+LINE = 2
+DASH = 6
+GAP = 4
+HANDLE = 8
 TAB_HEIGHT = 26
 TAB_WIDTH = 220
+TAB_INSET = 12
 CLOSE_WIDTH = 28
 MIN_SIZE = 64
 
@@ -40,10 +47,12 @@ class SelectionLayer(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 110))
+        painter.fillRect(self.rect(), DIM)
         if self._start is None:
             painter.setPen(QColor("white"))
-            painter.setFont(QFont("Segoe UI", 16))
+            font = QFont(FONT)
+            font.setPixelSize(20)
+            painter.setFont(font)
             painter.drawText(
                 self.rect(),
                 Qt.AlignmentFlag.AlignCenter,
@@ -54,7 +63,9 @@ class SelectionLayer(QWidget):
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
         painter.fillRect(area, Qt.GlobalColor.transparent)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-        painter.setPen(QPen(ACCENT, 2))
+        pen = QPen(ACCENT, LINE)
+        pen.setDashPattern([DASH / LINE, GAP / LINE])
+        painter.setPen(pen)
         painter.drawRect(area)
 
     def keyPressEvent(self, event):
@@ -116,7 +127,7 @@ class RegionPicker(QWidget):
 
 
 class RegionFrame(QWidget):
-    """A hollow border around the region. Clicks inside reach the app underneath."""
+    """A dashed outline around the region. Clicks inside reach the app underneath."""
 
     changed = Signal(QRect)
     dismissed = Signal()
@@ -128,45 +139,93 @@ class RegionFrame(QWidget):
         self._area = QRect()
         self._tab = QRect()
         self._drag = None
+        self._shape = None
+        self._capture_hidden = True
 
     def showEvent(self, event):
-        exclude_from_capture(self)
+        exclude_from_capture(self, self._capture_hidden)
+
+    def set_capture_hidden(self, hidden: bool):
+        self._capture_hidden = hidden
+        exclude_from_capture(self, hidden)
 
     def area(self) -> QRect:
         return QRect(self._area)
 
     def set_area(self, area: QRect):
         self._area = QRect(area)
-        margin = BORDER + TAB_HEIGHT
-        self.setGeometry(area.adjusted(-BORDER, -margin, BORDER, margin))
+        margin = HANDLE + TAB_HEIGHT
+        self.setGeometry(area.adjusted(-HANDLE, -margin, HANDLE, margin))
         self._update_shape()
         self.update()
 
     def clear(self):
         self._area = QRect()
         self._drag = None
+        self._shape = None
         self.hide()
 
     def close_button(self) -> QRect:
         return QRect(self._tab.right() - CLOSE_WIDTH + 1, self._tab.top(), CLOSE_WIDTH, TAB_HEIGHT)
 
     def _inner(self) -> QRect:
-        return QRect(QPoint(BORDER, BORDER + TAB_HEIGHT), self._area.size())
+        return QRect(QPoint(HANDLE, HANDLE + TAB_HEIGHT), self._area.size())
+
+    def _handles(self) -> list:
+        """Eight squares just outside the region, so they never land in the capture."""
+        inner = self._inner()
+        left, top = inner.left() - HANDLE, inner.top() - HANDLE
+        right, bottom = inner.right() + 1, inner.bottom() + 1
+        middle_x = inner.center().x() - HANDLE // 2
+        middle_y = inner.center().y() - HANDLE // 2
+        spots = [
+            (left, top), (right, top), (left, bottom), (right, bottom),
+            (middle_x, top), (middle_x, bottom), (left, middle_y), (right, middle_y),
+        ]
+        squares = [QRect(x, y, HANDLE, HANDLE) for x, y in spots]
+        return [square for square in squares if not square.intersects(self._tab)]
+
+    def _dashes(self) -> list:
+        inner = self._inner()
+        left, top = inner.left() - LINE, inner.top() - LINE
+        right, bottom = inner.right() + 1, inner.bottom() + 1
+        dashes = []
+        for x in range(left, right + LINE, DASH + GAP):
+            length = min(DASH, right + LINE - x)
+            dashes += [QRect(x, top, length, LINE), QRect(x, bottom, length, LINE)]
+        for y in range(top, bottom + LINE, DASH + GAP):
+            length = min(DASH, bottom + LINE - y)
+            dashes += [QRect(left, y, LINE, length), QRect(right, y, LINE, length)]
+        return dashes
 
     def _update_shape(self):
         inner = self._inner()
-        outer = inner.adjusted(-BORDER, -BORDER, BORDER, BORDER)
         screen = QGuiApplication.screenAt(self._area.center()) or QGuiApplication.primaryScreen()
-        room_above = self._area.top() - BORDER - TAB_HEIGHT >= screen.geometry().top()
-        tab_y = outer.top() - TAB_HEIGHT if room_above else outer.bottom() + 1
-        self._tab = QRect(outer.left(), tab_y, min(TAB_WIDTH, outer.width()), TAB_HEIGHT)
-        self.setMask(QRegion(outer).subtracted(QRegion(inner)).united(QRegion(self._tab)))
+        room_above = self._area.top() - LINE - TAB_HEIGHT >= screen.geometry().top()
+        tab_y = inner.top() - LINE - TAB_HEIGHT if room_above else inner.bottom() + 1 + LINE
+        tab_width = max(min(TAB_WIDTH, inner.width() - 2 * TAB_INSET), CLOSE_WIDTH)
+        self._tab = QRect(inner.left() + TAB_INSET, tab_y, tab_width, TAB_HEIGHT)
+
+        shape = (self._area.size(), room_above)
+        if shape == self._shape:  # moving keeps the same outline, so skip the redraw
+            return
+        self._shape = shape
+        bitmap = QBitmap(self.size())
+        bitmap.fill(Qt.GlobalColor.color0)
+        painter = QPainter(bitmap)
+        for part in self._dashes() + self._handles() + [self._tab]:
+            painter.fillRect(part, Qt.GlobalColor.color1)
+        painter.end()
+        self.setMask(bitmap)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), ACCENT)
-        painter.setPen(QColor("#1B1B1F"))
-        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        painter.setPen(INK)
+        font = QFont(FONT)
+        font.setPixelSize(12)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
         size = self._area.size()
         painter.drawText(
             self._tab.adjusted(10, 0, -CLOSE_WIDTH, 0),
@@ -174,7 +233,7 @@ class RegionFrame(QWidget):
             f"Drag to move  ·  {size.width()} × {size.height()}",
         )
         button = self.close_button()
-        painter.fillRect(button, QColor("#1B1B1F"))
+        painter.fillRect(button, INK)
         painter.setPen(QPen(ACCENT, 2))
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         cross = button.adjusted(9, 8, -9, -8)
@@ -187,15 +246,14 @@ class RegionFrame(QWidget):
         if self._tab.contains(point):
             return "move"
         inner = self._inner()
-        grip = 14
         edges = ""
-        if point.y() < inner.top() + grip:
+        if point.y() < inner.top():
             edges += "n"
-        if point.y() > inner.bottom() - grip:
+        if point.y() > inner.bottom():
             edges += "s"
-        if point.x() < inner.left() + grip:
+        if point.x() < inner.left():
             edges += "w"
-        if point.x() > inner.right() - grip:
+        if point.x() > inner.right():
             edges += "e"
         return edges
 

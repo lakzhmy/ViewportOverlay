@@ -28,6 +28,7 @@ def _box_blur(image: np.ndarray, radius: int) -> np.ndarray:
 
 class StandInEngine(Engine):
     name = "Stand-in filter (no AI)"
+    label = "Stand-in"
     uses_prompt = False
 
     def render(self, frame: np.ndarray, params: RenderParams) -> np.ndarray:

@@ -1,4 +1,4 @@
-# Viewport Overlay
+# ViewportOverlay
 
 A Windows desktop app for designers. Draw a rectangle over any app, such as Rhino, PowerPoint or Miro, and a floating window shows a live AI render of what's under it.
 
@@ -7,13 +7,14 @@ A Windows desktop app for designers. Draw a rectangle over any app, such as Rhin
 ## What works today
 
 - Draw, move, resize and clear the capture region
+- A branded window with the render on top, glass controls and dark settings below
 - Live render at about 10 frames per second with SD-Turbo, running on your own PC
 - Editable prompt and style while it runs
 - A "Follow my drawing" slider
-- The app hides its own windows from the capture
+- The app hides its own windows from the capture, with an on/off switch
 - Rendering pauses when the screen isn't changing
 
-The app's windows also won't appear in screenshots, recordings or screen sharing.
+While that switch is on, the windows also won't appear in screenshots, recordings or screen sharing.
 
 ## Planned
 
@@ -38,5 +39,6 @@ Without the AI engine, you can still try the app by choosing the stand-in engine
 - [SD-Turbo](https://huggingface.co/stabilityai/sd-turbo) is by Stability AI and has its own licence. Check its terms before any commercial use.
 - [TAESD](https://github.com/madebyollin/taesd) is MIT licensed.
 - [PySide6](https://doc.qt.io/qtforpython-6/) is LGPL licensed.
+- [Inter Tight](https://github.com/rsms/inter-tight) is bundled under the SIL Open Font License (`app/assets/OFL.txt`).
 
 No licence has been chosen for this project's own code yet.

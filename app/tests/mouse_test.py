@@ -9,7 +9,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from viewport_overlay.region import BORDER, TAB_HEIGHT
+from viewport_overlay.region import HANDLE, TAB_HEIGHT
 from viewport_overlay.screen import to_physical
 from viewport_overlay.window import MainWindow
 
@@ -57,7 +57,7 @@ drag(frame, tab, tab + QPoint(60, 40))
 moved = frame.area()
 check("tab drag moves region", moved.topLeft() == area.topLeft() + QPoint(60, 40) and moved.size() == start_size, str(moved))
 
-right = QPoint(frame._inner().right() + BORDER // 2, frame._inner().center().y())
+right = QPoint(frame._inner().right() + HANDLE // 2, frame._inner().center().y())
 drag(frame, right, right + QPoint(50, 0))
 check("edge drag resizes region", frame.area().width() == moved.width() + 50, str(frame.area()))
 

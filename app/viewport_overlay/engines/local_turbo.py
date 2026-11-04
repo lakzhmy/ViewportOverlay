@@ -35,6 +35,7 @@ def strength_index(follow: float) -> int:
 
 class LocalTurboEngine(Engine):
     name = "Local SD-Turbo (this PC)"
+    label = "Local"
 
     def __init__(self):
         self._process = None
