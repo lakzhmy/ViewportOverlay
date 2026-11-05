@@ -202,7 +202,6 @@ window.preview.show_panel(True)
 pump(0.2)
 panel = window.preview.panel
 check("the look panel fits the small window", window.preview.rect().contains(panel.geometry()), str(panel.geometry()))
-check("the bar stays clear of the panel", window.preview.bar.geometry().bottom() < panel.y(), str(window.preview.bar.geometry()))
 if OUT:
     window.grab().save(str(OUT / "capture_narrow_panel.png"))
 window.preview.show_panel(False)

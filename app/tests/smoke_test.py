@@ -90,9 +90,9 @@ pump(1.0)
 check("still screen skips rendering", len(frames) - count <= 3, f"{len(frames) - count} frames in 1s")
 
 count = len(frames)
-window.follow_slider.setValue(20)
+window.prompt_box.setPlainText("steel")
 pump(0.4)
-check("slider updates while running", len(frames) > count)
+check("a change of settings renders while running", len(frames) > count)
 
 count = len(frames)
 green.setGeometry(area.adjusted(30, 0, 0, 0))
@@ -123,7 +123,7 @@ loose = StandInEngine().render(frame, RenderParams(follow=0.0))
 strict = StandInEngine().render(frame, RenderParams(follow=1.0))
 speed = (time.perf_counter() - started) / 2
 check("engine keeps size and type", loose.shape == strict.shape and loose.dtype == np.uint8, str(loose.shape))
-check("slider changes the result", not np.array_equal(loose, strict))
+check("how closely it follows changes the result", not np.array_equal(loose, strict))
 print(f"stand-in render time at 1080p: {speed * 1000:.0f} ms")
 
 print("ALL PASSED" if all(results) else "SOME FAILED", flush=True)

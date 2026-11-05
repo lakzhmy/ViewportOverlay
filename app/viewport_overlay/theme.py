@@ -38,10 +38,6 @@ QLabel {{ color: {GRAY_500}; background: transparent; font-size: 13px; }}
 QLabel#heading {{ color: {GRAY_400}; font-size: 13px; }}
 QLabel#stageTitle {{ color: {PAPER_50}; font-size: 24px; font-weight: 600; }}
 QLabel#stageHint {{ color: {PAPER_100}; font-size: 14px; }}
-QLabel#amount {{
-    background: {INK_900}; color: {PAPER_50}; border-radius: 8px; padding: 4px 9px;
-    font-family: "{MONO}", Consolas; font-size: 12px;
-}}
 QToolTip {{ background: {INK_800}; color: {PAPER_50}; border: 1px solid {INK_700}; padding: 4px; }}
 
 QFrame#panel {{ background: {PAPER_50}; border-radius: 12px; }}
@@ -61,4 +57,5 @@ QLineEdit {{
     padding: 2px 0; font-size: 13px; selection-background-color: {ORANGE}; selection-color: {INK_900};
 }}
 QLineEdit:focus {{ border-bottom-color: {INK_700}; }}
+QLineEdit:disabled {{ color: {GRAY_400}; }}
 """

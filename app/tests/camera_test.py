@@ -18,6 +18,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from viewport_overlay import capture as capture_module
+from viewport_overlay import looks as looks_module
+from viewport_overlay import window as window_module
 from viewport_overlay.engines import LocalKleinEngine, LocalTurboEngine, StandInEngine
 from viewport_overlay.screen import to_physical
 from viewport_overlay.window import MainWindow
@@ -29,6 +31,9 @@ user32 = ctypes.windll.user32
 MOUSE_DOWN, MOUSE_UP = 0x0002, 0x0004
 results = []
 capture_module.SETTINGS_FILE = Path(tempfile.mkdtemp(prefix="camera_test_")) / "settings.json"
+looks_module.LOOKS_FOLDER = Path(tempfile.mkdtemp(prefix="camera_looks_"))
+opened = []
+window_module.open_folder = opened.append
 
 
 def check(name, passed, detail=""):
@@ -121,20 +126,46 @@ QTest.keyClick(window, Qt.Key.Key_Escape)
 pump(0.1)
 check("Esc closes the panel", not stage.panel.isVisible())
 
-# The bar: Strict at the top.
+# Each look's wording and reference live in its own folder.
+check("the Follow bar is gone", not hasattr(stage, "bar") and not hasattr(window, "follow_slider"))
+look = looks_module.LOOKS[0]
+wording = look.path / looks_module.WORDING_FILE
+check("each look gets a wording file", wording.read_text(encoding="utf-8").strip() == look.first_wording)
+wording.write_text("\ufeffOn a yacht.", encoding="utf-8")
+check("edited wording reaches the renderer", window.params().style == "On a yacht.", window.params().style)
+wording.write_text("", encoding="utf-8")
+check("an emptied file falls back to the first wording", look.style == look.first_wording)
+(look.path / "reference.jpg").write_bytes(b"x")
+check("a jpg works as a reference", window.params().reference.endswith("reference.jpg"), window.params().reference)
+sent = []
+window.worker = type("Listener", (), {"set_params": lambda self, params: sent.append(params), "set_paused": lambda self, paused: None})()
+wording.write_text("In a museum.", encoding="utf-8")
+pump(1.3)
+check("a saved edit is noticed while running", sent and sent[-1].style == "In a museum.", str(sent[-1:]))
+window.worker = None
+click_widget(stage.orb)
+click_widget(stage.panel.edit_button)
+check("Edit look opens the look's folder", opened == [look.path], str(opened))
+window.look_box.setCurrentIndex(3)
+check("looks with no folder have nothing to edit", not stage.panel.edit_button.isEnabled())
+click_widget(stage.panel.cloud_tab)
+check("Edit look stays with the Local tab", not stage.panel.edit_button.isVisible())
+click_widget(stage.panel.local_tab)
+stage.show_panel(False)
+
+# The seed.
+window.look_box.setCurrentIndex(0)
+check("the seed box is on for klein", window.seed_box.isEnabled())
+check("Try another waits for a region", not window.another_button.isEnabled())
+window.seed_box.setText("4242")
+window.seed_box.editingFinished.emit()
+check("a typed seed reaches the renderer", window.params().seed == 4242, str(window.params().seed))
+check("the seed is remembered", capture_module.load_settings()["seed"] == 4242)
+window.seed_box.setText("")
+window.seed_box.editingFinished.emit()
+check("an empty box puts the seed back", window.seed_box.text() == "4242", window.seed_box.text())
 window.look_box.setCurrentIndex(4)
-bar = stage.bar
-click(bar.mapToGlobal(QPoint(13, 13)))
-check("the top of the bar is strict", window.follow_slider.value() == 100, str(window.follow_slider.value()))
-click(bar.mapToGlobal(QPoint(13, bar.height() - 13)))
-check("the bottom of the bar is loose", window.follow_slider.value() == 0, str(window.follow_slider.value()))
-click(bar.mapToGlobal(QPoint(13, bar.height() // 2)))
-check("the middle is in the middle", abs(window.follow_slider.value() - 50) <= 1, str(window.follow_slider.value()))
-check("the number shows on the bar", stage.amount.isVisible() and "Follow my drawing" in stage.amount.text(), stage.amount.text())
-check("the bar's value reaches the renderer", abs(window.params().follow - 0.5) < 0.02)
-point_to(stage.mapToGlobal(QPoint(300, 300)))
-check("the number hides afterwards", not stage.amount.isVisible())
-window.follow_slider.setValue(33)
+check("Filter has no seed", not window.seed_box.isEnabled() and not window.another_button.isEnabled())
 
 # A region turns the logo orange and starts rendering, with no Start button.
 work = window.screen().availableGeometry()
@@ -152,6 +183,34 @@ worker = window.worker
 pump(0.5)
 check("Filter brings the filter back", window._engine is StandInEngine and window.worker is worker)
 click(stage.mapToGlobal(QPoint(300, 300)))
+
+# Try another, with a stand-in that uses a seed.
+class Seeded(StandInEngine):
+    uses_seed = True
+
+
+window.stop()
+window._engine = Seeded
+window.start()
+window._refresh_seed()
+pump(0.6)
+check("Try another is ready with a region", window.another_button.isEnabled())
+window.pause_button.setChecked(True)
+click_widget(window.another_button)
+pump(0.6)
+seed = window.params().seed
+check("Try another picks a new seed", seed != 4242 and window.seed_box.text() == str(seed), str(seed))
+check("Try another carries on from Pause", not window.pause_button.isChecked())
+check("the image knows its seed", stage.current_image().text("seed") == str(seed), stage.current_image().text("seed"))
+folder = Path(tempfile.mkdtemp(prefix="camera_seed_"))
+saved = capture_module.save_image(stage.current_image(), folder)
+check("the capture's name has the seed", saved.stem.endswith(f"_seed{seed}"), saved.name)
+check("the saved file holds the seed too", QImage(str(saved)).text("seed") == str(seed))
+window._engine = StandInEngine
+window.stop()
+window.start()
+pump(0.4)
+check("images from an engine with no seed have no seed", stage.current_image().text("seed") == "")
 
 # The logo clears the region but keeps the last render.
 click_widget(window.logo)
@@ -234,6 +293,20 @@ if window._key_window == int(window.winId()):
     window.to_folder.setChecked(True)
 else:
     print("SKIP the shortcut checks: another copy of the app owns the key", flush=True)
+
+# The space around the render continues its edges.
+wide = np.full((100, 600, 3), 255, np.uint8)
+wide[40:60] = 0
+stage.show_image(QImage(wide.data, 600, 100, 1800, QImage.Format.Format_RGB888).copy())
+pump(0.1)
+above = stage._frame.pixelColor(stage._frame.width() // 2, 4)
+below = stage._frame.pixelColor(stage._frame.width() // 2, stage._frame.height() - 4)
+check("a white render has white margins", min(above.red(), below.red()) >= 250, f"{above.red()}, {below.red()}")
+tall = np.full((600, 100, 3), 20, np.uint8)
+stage.show_image(QImage(tall.data, 100, 600, 300, QImage.Format.Format_RGB888).copy())
+pump(0.1)
+left = stage._frame.pixelColor(4, stage._frame.height() // 2)
+check("a dark tall render has dark margins", left.red() <= 25, str(left.red()))
 
 # Screenshots of the design with a real picture.
 if OUT:

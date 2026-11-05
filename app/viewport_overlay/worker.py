@@ -108,6 +108,8 @@ class RenderWorker(QThread):
                         was_waiting = False
                         previous = frame
                         image = to_qimage(self._engine.render(frame, params))
+                        if self._engine.uses_seed:
+                            image.setText("seed", str(params.seed))  # travels with the image into a capture
                         now = time.perf_counter()
                         fps = 1.0 / (now - last_done) if last_done and not was_idle else 0.0
                         last_done = now

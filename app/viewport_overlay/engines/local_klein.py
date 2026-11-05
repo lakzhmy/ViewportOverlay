@@ -8,7 +8,6 @@ from .local_turbo import LocalTurboEngine
 
 AI_FOLDER = Path(__file__).resolve().parents[3] / "KleinEngine"
 MODELS = Path(os.environ.get("VIEWPORT_MODELS", r"C:\ComfyUI\models"))  # read only
-SEED = 7
 
 START = ("Turn image 1 into a photorealistic product render of a tall upright gaming terminal. "
          "Keep the exact silhouette, proportions, parts and viewing angle of image 1, and do not change its shape. "
@@ -28,6 +27,7 @@ class LocalKleinEngine(LocalTurboEngine):
     label = "Klein"
     folder = AI_FOLDER
     server_arguments = (str(MODELS),)
+    uses_seed = True
     settle_seconds = 0.5  # the graphics card stays free for your CAD program while the view moves
 
     def _request(self, width: int, height: int, params: RenderParams) -> bytes:
@@ -36,5 +36,5 @@ class LocalKleinEngine(LocalTurboEngine):
             "height": height,
             "prompt": build_prompt(params),
             "reference": params.reference,
-            "seed": SEED,
+            "seed": params.seed,
         }).encode()

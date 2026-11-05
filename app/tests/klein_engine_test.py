@@ -172,6 +172,25 @@ started = time.time()
 check("an image arrives after stopping", wait_for(lambda: len(frames) > count, 10), f"{time.time() - started:.1f} s")
 print(f"stop moving to new image: {time.time() - started:.1f} s", flush=True)
 
+# Try another makes a different design, and the seed brings the old one back.
+pump(2.5)
+before = frames[-1]
+seed = window.seed_box.text()
+count = len(frames)
+window.another_button.click()
+check("Try another renders", wait_for(lambda: len(frames) > count, 10), f"{len(frames) - count} frames")
+pump(0.2)
+check("Try another changes the design", difference(to_array(before), to_array(frames[-1])) > 3,
+      f"{difference(to_array(before), to_array(frames[-1])):.1f}")
+check("the image carries its seed", frames[-1].text("seed") == window.seed_box.text(), frames[-1].text("seed"))
+count = len(frames)
+window.seed_box.setText(seed)
+window.seed_box.editingFinished.emit()
+check("the old seed renders", wait_for(lambda: len(frames) > count, 10))
+pump(0.2)
+check("the old seed brings the design back", difference(to_array(before), to_array(frames[-1])) < 1.0,
+      f"{difference(to_array(before), to_array(frames[-1])):.2f}")
+
 # Pause: nothing renders, the model stays, and it carries on at once.
 pump(2.5)
 process = window.worker._engine._process

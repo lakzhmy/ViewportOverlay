@@ -1,8 +1,8 @@
-"""The camera's parts: logo, shutter, orb, strength bar, text switches and resize grips."""
+"""The camera's parts: logo, shutter, orb, text switches and resize grips."""
 from PySide6.QtCore import QByteArray, QPointF, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QRadialGradient
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QAbstractButton, QButtonGroup, QGridLayout, QSlider, QWidget
+from PySide6.QtWidgets import QAbstractButton, QButtonGroup, QGridLayout, QWidget
 
 from .theme import ASSETS, FONT, GRAY_400, GRAY_500, INK_700, INK_900, ORANGE, PAPER_100, PAPER_50
 
@@ -218,62 +218,6 @@ class LookBox(QWidget):
 
     def currentData(self):
         return self._looks[self.currentIndex()]
-
-
-class StrengthBar(QSlider):
-    """How closely the render follows your drawing. Strict is at the top."""
-
-    WIDTH = 26
-    peek = Signal(bool)  # True while the number should show
-
-    def __init__(self):
-        super().__init__(Qt.Orientation.Vertical)
-        self.setFixedWidth(self.WIDTH)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setAttribute(Qt.WidgetAttribute.WA_Hover)
-        self.setToolTip("Follow my drawing: Strict at the top, Loose at the bottom")
-        self._dragging = False
-
-    def dot_y(self) -> float:
-        radius = self.WIDTH / 2
-        share = (self.value() - self.minimum()) / (self.maximum() - self.minimum())
-        return radius + (self.height() - self.WIDTH) * (1 - share)
-
-    def _follow(self, event):
-        radius = self.WIDTH / 2
-        share = 1 - (event.position().y() - radius) / (self.height() - self.WIDTH)
-        self.setValue(round(self.minimum() + share * (self.maximum() - self.minimum())))
-
-    def enterEvent(self, event):
-        self.peek.emit(True)
-
-    def leaveEvent(self, event):
-        if not self._dragging:
-            self.peek.emit(False)
-
-    def mousePressEvent(self, event):
-        self._dragging = True
-        self._follow(event)
-
-    def mouseMoveEvent(self, event):
-        self._follow(event)
-
-    def mouseReleaseEvent(self, event):
-        self._dragging = False
-        self.peek.emit(self.rect().contains(event.position().toPoint()))
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        radius = self.WIDTH / 2
-        track = QColor(PAPER_50)
-        track.setAlphaF(0.9)
-        painter.setPen(QPen(QColor(10, 11, 12, 50), 1))
-        painter.setBrush(track)
-        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(ORANGE))
-        painter.drawEllipse(QPointF(radius, self.dot_y()), radius, radius)
 
 
 class LineButton(QAbstractButton):

@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtGui import QGuiApplication, QImage
 
 SETTINGS_FILE = Path(__file__).resolve().parents[1] / "settings.json"
-DEFAULTS = {"to_folder": True, "to_clipboard": True, "folder": "", "quality": "medium", "cloud_agreed": False}
+DEFAULTS = {"to_folder": True, "to_clipboard": True, "folder": "", "quality": "medium", "cloud_agreed": False, "seed": 7}
 
 
 def load_settings() -> dict:
@@ -21,9 +21,9 @@ def save_settings(settings: dict) -> None:
     SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 
-def free_path(folder: Path, moment: datetime) -> Path:
-    """A file name from the date and time. Captures in the same second get a number."""
-    stem = f"ViewportOverlay_{moment:%Y-%m-%d_%H-%M-%S}"
+def free_path(folder: Path, moment: datetime, seed: str = "") -> Path:
+    """A file name from the date, time and seed. Captures in the same second get a number."""
+    stem = f"ViewportOverlay_{moment:%Y-%m-%d_%H-%M-%S}" + (f"_seed{seed}" if seed else "")
     path = folder / f"{stem}.png"
     number = 2
     while path.exists():
@@ -38,7 +38,7 @@ def save_image(image: QImage, folder: Path) -> Path | None:
         folder.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    path = free_path(folder, datetime.now())
+    path = free_path(folder, datetime.now(), image.text("seed"))
     return path if image.save(str(path), "PNG") else None
 
 

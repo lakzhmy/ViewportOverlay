@@ -169,11 +169,12 @@ def main() -> None:
         return prompts[text]
 
     def reference_image(path: str):
-        if path not in references:
+        changed = os.path.getmtime(path)  # a swapped image takes effect straight away
+        if path not in references or references[path][0] != changed:
             image = Image.open(path).convert("RGB")
             image.thumbnail((REFERENCE_SIDE, REFERENCE_SIDE))
-            references[path] = image
-        return references[path]
+            references[path] = (changed, image)
+        return references[path][1]
 
     send({"ready": True})
     while True:

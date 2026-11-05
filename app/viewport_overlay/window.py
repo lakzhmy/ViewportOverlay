@@ -1,15 +1,17 @@
 """The main window: a simple camera. Viewfinder on top, then the description and one line of options."""
+import random
 import time
 from ctypes import wintypes
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QCursor, QIcon, QImage
+from PySide6.QtCore import QEvent, QRect, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QCursor, QDesktopServices, QIcon, QImage, QIntValidator
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -51,6 +53,10 @@ NOTICE_MS = 3000
 PROBLEM_MS = 8000
 KEEP_LOADED_MS = 10 * 60 * 1000  # how long an AI model waits for a new region
 WAIT_FOREVER_MS = 600000  # until the final arrives, fails or is cancelled
+LOOK_CHECK_MS = 1000  # how often the current look's files are checked for edits
+HIGHEST_SEED = 2147483647
+NEW_SEEDS_UP_TO = 99999  # short enough to note down
+SEED_BOX_WIDTH = 62
 MARGIN = 18
 STRIP = 30
 FOOTER = 44
@@ -61,6 +67,10 @@ CLOUD_NOTICE = (
     "to make the image. Each image costs money on your fal account.\n\n"
     "Only send work you're allowed to share with them. Send this one?"
 )
+
+
+def open_folder(folder: Path) -> None:
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
 
 def label(text: str, name: str) -> QLabel:
@@ -106,10 +116,8 @@ class MainWindow(QMainWindow):
         self.capture_button.setEnabled(False)
         self.capture_button.setToolTip(f"Capture this render ({CAPTURE_KEY_NAME})")
         self.capture_button.clicked.connect(self.capture)
-        self.follow_slider = self.preview.bar
-        self.follow_slider.setRange(0, 100)
-        self.follow_slider.setValue(33)
-        self.follow_slider.valueChanged.connect(self._params_changed)
+        for look in LOOKS:
+            look.write_wording()
         self.look_box = self.preview.panel.look_box
         self.look_box.currentIndexChanged.connect(self._look_changed)
         self._final = None
@@ -124,7 +132,13 @@ class MainWindow(QMainWindow):
         self._final_clock = QTimer(self)
         self._final_clock.setInterval(1000)
         self._final_clock.timeout.connect(self._refresh_final)
+        self._look_stamp = ()
+        self._look_check = QTimer(self)
+        self._look_check.setInterval(LOOK_CHECK_MS)
+        self._look_check.timeout.connect(self._check_look_files)
+        self._look_check.start()
         panel = self.preview.panel
+        panel.edit_button.clicked.connect(self._edit_look)
         self.preview.final_pill.clicked.connect(self._final_clicked)
         panel.key_button.clicked.connect(self._key_clicked)
         panel.key_box.returnPressed.connect(self._key_clicked)
@@ -165,16 +179,32 @@ class MainWindow(QMainWindow):
 
     def _build_prompt(self) -> QFrame:
         self.prompt_box = QPlainTextEdit()
-        self.prompt_box.setPlaceholderText("modern coffee machine, studio light")
+        self.prompt_box.setPlaceholderText("brushed steel body, blue edge light")
         self.prompt_box.document().setDocumentMargin(0)
         self.prompt_box.setFixedHeight(62)
         self.prompt_box.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.prompt_box.textChanged.connect(self._params_changed)
+        self.seed_box = QLineEdit(str(self.capture_settings["seed"]))
+        self.seed_box.setValidator(QIntValidator(0, HIGHEST_SEED, self))
+        self.seed_box.setFixedWidth(SEED_BOX_WIDTH)
+        self.seed_box.setToolTip("The same seed and view give the same design. Type one from a capture's file name to get back to it.")
+        self.seed_box.editingFinished.connect(self._seed_typed)
+        self.another_button = LineButton("Try another", switch=False)
+        self.another_button.setToolTip("A new variation of the design")
+        self.another_button.clicked.connect(self.try_another)
+        heading = QHBoxLayout()
+        heading.setSpacing(8)
+        heading.addWidget(label("Describe it", "heading"))
+        heading.addStretch()
+        heading.addWidget(label("Seed", "heading"))
+        heading.addWidget(self.seed_box)
+        heading.addSpacing(8)
+        heading.addWidget(self.another_button)
         area = QFrame()
         column = QVBoxLayout(area)
         column.setContentsMargins(2, 14, 2, 0)
         column.setSpacing(6)
-        column.addWidget(label("Describe it", "heading"))
+        column.addLayout(heading)
         column.addWidget(self.prompt_box)
         return area
 
@@ -335,8 +365,8 @@ class MainWindow(QMainWindow):
         return RenderParams(
             prompt=self.prompt_box.toPlainText().strip(),
             style=self.look_box.currentData().style,
-            follow=self.follow_slider.value() / 100.0,
             reference=self.look_box.currentData().reference,
+            seed=self.capture_settings["seed"],
         )
 
     def _say(self, text: str):
@@ -482,6 +512,41 @@ class MainWindow(QMainWindow):
         self.stop()
         self._say("Nothing selected yet")
 
+    def _set_seed(self, seed: int):
+        self.capture_settings["seed"] = seed
+        save_settings(self.capture_settings)
+        self.seed_box.setText(str(seed))
+        self._params_changed()
+        self.pause_button.setChecked(False)  # asking for a design means wanting to see it
+        if self._holding:
+            self._leave_final()
+
+    def try_another(self):
+        self._set_seed(random.randint(1, NEW_SEEDS_UP_TO))
+
+    def _seed_typed(self):
+        typed = self.seed_box.text()
+        if not typed:
+            self.seed_box.setText(str(self.capture_settings["seed"]))
+        elif int(typed) != self.capture_settings["seed"]:
+            self._set_seed(int(typed))
+
+    def _refresh_seed(self):
+        self.seed_box.setEnabled(self._engine.uses_seed)
+        self.another_button.setEnabled(self._engine.uses_seed and self.region_frame.area().isValid())
+
+    def _edit_look(self):
+        look = self.look_box.currentData()
+        if look.folder:
+            open_folder(look.path)
+
+    def _check_look_files(self):
+        """A saved change to the wording or reference shows up in the next render."""
+        stamp = self.look_box.currentData().stamp()
+        if stamp != self._look_stamp:
+            self._look_stamp = stamp
+            self._params_changed()
+
     def _show_folder(self):
         folder = self.capture_settings["folder"]
         self.folder_button.set_text(folder or NO_FOLDER)
@@ -570,6 +635,7 @@ class MainWindow(QMainWindow):
         self._unload_timer.stop()
         self.pause_button.setEnabled(True)
         self.pause_button.setChecked(False)
+        self._refresh_seed()
         if self.worker:
             self.worker.set_region(to_physical(area))
         else:
@@ -593,6 +659,7 @@ class MainWindow(QMainWindow):
         else:
             self.stop()
         self.region_frame.clear()
+        self._refresh_seed()
         self.logo.set_on(False)
         self.preview.show_start()
         self._say("Nothing selected yet")
@@ -613,10 +680,14 @@ class MainWindow(QMainWindow):
         self.preview.orb.set_colors(look.colors)
         self.prompt_box.setEnabled(look.engine.uses_prompt)
         self.prompt_box.setToolTip("" if look.engine.uses_prompt else FILTER_NOTE)
-        if look.engine is self._engine:
+        self.preview.panel.edit_button.setEnabled(bool(look.folder))
+        self._look_stamp = look.stamp()
+        same_engine = look.engine is self._engine
+        self._engine = look.engine
+        self._refresh_seed()
+        if same_engine:
             self._params_changed()
             return
-        self._engine = look.engine
         if self.region_frame.area().isValid():
             self.stop()
             self.start()

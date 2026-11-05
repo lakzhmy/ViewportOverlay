@@ -18,15 +18,15 @@ from PySide6.QtWidgets import (
 )
 
 from .cloud import QUALITIES
-from .controls import LineButton, LogoButton, LookBox, Orb, Shutter, StrengthBar, WindowButton
+from .controls import LineButton, LogoButton, LookBox, Orb, Shutter, WindowButton
 from .looks import LOOKS
-from .theme import INK_950, LIME, PAPER_50, STONE
+from .theme import LIME, PAPER_50, STONE
 
 BLUR_DIVISOR = 24
+EDGE_SAMPLE = 4  # how many pixels of the render's edge the margins are made from
 EDGE = 16
 RADIUS = 14
 POINTER_CHECK_MS = 100
-BAR_LONGEST = 300
 PANEL_GAP = 12
 PILL_GAP = 14
 GLASS_RADIUS = 18
@@ -47,6 +47,30 @@ def blurred(image: QImage, size: QSize) -> QImage:
     return image.scaled(small, ignore, mode).scaled(size, ignore, mode)
 
 
+def paint_margins(painter: QPainter, image: QImage, target: QRect, area: QRect):
+    """Carries the render's own edges out to the viewfinder's edge, so no band shows around it."""
+    width, height = image.width(), image.height()
+    if target.top() > area.top():
+        soft = QSize(max(width // BLUR_DIVISOR, 4), 1)
+        strips = (
+            (image.copy(0, 0, width, EDGE_SAMPLE), QRect(0, 0, area.width(), target.top())),
+            (image.copy(0, height - EDGE_SAMPLE, width, EDGE_SAMPLE),
+             QRect(0, target.bottom() + 1, area.width(), area.height() - target.bottom() - 1)),
+        )
+    else:
+        soft = QSize(1, max(height // BLUR_DIVISOR, 4))
+        strips = (
+            (image.copy(0, 0, EDGE_SAMPLE, height), QRect(0, 0, target.left(), area.height())),
+            (image.copy(width - EDGE_SAMPLE, 0, EDGE_SAMPLE, height),
+             QRect(target.right() + 1, 0, area.width() - target.right() - 1, area.height())),
+        )
+    mode = Qt.TransformationMode.SmoothTransformation
+    ignore = Qt.AspectRatioMode.IgnoreAspectRatio
+    for strip, band in strips:
+        if not band.isEmpty():
+            painter.drawImage(band, strip.scaled(soft, ignore, mode).scaled(band.size(), ignore, mode))
+
+
 class LookPanel(QFrame):
     """Opens from the orb: which look to render in, and the Render final settings."""
 
@@ -64,12 +88,16 @@ class LookPanel(QFrame):
         tab_group = QButtonGroup(self)
         tab_group.addButton(self.local_tab)
         tab_group.addButton(self.cloud_tab)
+        self.edit_button = LineButton("Edit look", switch=False)
+        self.edit_button.setToolTip("Open this look's folder, with its wording and reference image")
         self.local_tab.toggled.connect(lambda local: self.pages.setCurrentIndex(0 if local else 1))
+        self.local_tab.toggled.connect(self.edit_button.setVisible)
         tabs = QHBoxLayout()
         tabs.setSpacing(12)
         tabs.addWidget(self.local_tab)
         tabs.addWidget(self.cloud_tab)
         tabs.addStretch()
+        tabs.addWidget(self.edit_button)
         column = QVBoxLayout(self)
         column.setContentsMargins(16, 14, 16, 12)
         column.setSpacing(10)
@@ -146,7 +174,6 @@ class Stage(QWidget):
         self.logo.set_on(False)
         self.shutter = Shutter()
         self.orb = Orb()
-        self.bar = StrengthBar()
         self.final_pill = QPushButton()
         self.final_pill.setObjectName("pill")
         self.final_pill.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -159,15 +186,8 @@ class Stage(QWidget):
         self.maximise_button.clicked.connect(self.maximise_clicked)
         self.close_button.clicked.connect(self.close_clicked)
         self.orb.clicked.connect(lambda: self.show_panel(True))
-        for widget in (self.logo, self.shutter, self.orb, self.bar, self.final_pill):
+        for widget in (self.logo, self.shutter, self.orb, self.final_pill):
             self._float(widget)
-
-        self.amount = QLabel(self)
-        self.amount.setObjectName("amount")
-        self.amount.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.amount.hide()
-        self.bar.peek.connect(self._peek_amount)
-        self.bar.valueChanged.connect(self._place_amount)
 
         self.panel = LookPanel()
         self.panel.setParent(self)
@@ -281,16 +301,6 @@ class Stage(QWidget):
         pill.move(self.shutter.geometry().right() + PILL_GAP, self.shutter.geometry().center().y() - pill.height() // 2)
         pill.setVisible(self._final_shown and not (panel_open and self.panel.geometry().intersects(pill.geometry())))
 
-    def _peek_amount(self, shown: bool):
-        self.amount.setVisible(shown)
-        self._place_amount()
-
-    def _place_amount(self):
-        self.amount.setText(f"Follow my drawing  {self.bar.value()}")
-        self.amount.adjustSize()
-        x = self.bar.x() - self.amount.width() - 8
-        self.amount.move(x, round(self.bar.y() + self.bar.dot_y() - self.amount.height() / 2))
-
     def set_chrome(self, value: float):
         self._chrome = value
         for effect in self._floating:
@@ -310,23 +320,17 @@ class Stage(QWidget):
         self.update()
 
     def _rebuild(self):
-        """Compose the render once: the whole image, on a soft copy of itself."""
+        """Compose the render once: the whole image, with its edges carried out to fill the viewfinder."""
         size = self.size() * self.devicePixelRatioF()
         if size.isEmpty() or self._image is None:
             return
         frame = QImage(size, QImage.Format.Format_RGB32)
         painter = QPainter(frame)
-        cover = self._image.size().scaled(size, Qt.AspectRatioMode.KeepAspectRatioByExpanding)
-        backdrop = QRect(0, 0, cover.width(), cover.height())
-        backdrop.moveCenter(frame.rect().center())
-        painter.drawImage(backdrop, blurred(self._image, cover))
-        shade = QColor(INK_950)
-        shade.setAlpha(120)
-        painter.fillRect(frame.rect(), shade)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         fit = self._image.size().scaled(size, Qt.AspectRatioMode.KeepAspectRatio)
         target = QRect(0, 0, fit.width(), fit.height())
         target.moveCenter(frame.rect().center())
+        paint_margins(painter, self._image, target, frame.rect())
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawImage(target, self._image)
         painter.end()
         self._frame = frame
@@ -413,10 +417,7 @@ class Stage(QWidget):
         self.orb.move(width - EDGE - Orb.SIZE, height - EDGE - Orb.SIZE)
         self.shutter.move((width - Shutter.SIZE) // 2, height - EDGE - Shutter.SIZE)
         self.panel.move(width - PANEL_GAP - self.panel.width(), height - PANEL_GAP - self.panel.height())
-        room = self.panel.y() - PANEL_GAP - EDGE  # the bar stays clear of the panel, so it doesn't jump when that opens
-        self.bar.setGeometry(width - EDGE - StrengthBar.WIDTH, EDGE, StrengthBar.WIDTH, max(min(room, BAR_LONGEST), 80))
         self._place_shutter()
-        self._place_amount()
         self._rebuild()
         self.resized.emit()
 
