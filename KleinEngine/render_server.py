@@ -4,6 +4,7 @@ It opens no network ports and blocks model downloads. Each request is one line o
 followed by raw RGB bytes, and each reply has the same shape. Models are read from the
 folder given as the first argument, and nothing there is changed.
 """
+import gc
 import json
 import os
 import sys
@@ -54,12 +55,12 @@ def unpack_fp4(torch, packed, block_scales, overall_scale):
 
 
 def load_text_encoder(torch, models: Path):
-    """Unpacks the compressed encoder file into plain numbers."""
+    """Unpacks the compressed encoder file into plain numbers, and keeps it in system memory."""
     from safetensors import safe_open
     from transformers import Qwen3Config, Qwen3ForCausalLM
 
     plain = {}
-    with safe_open(models / "text_encoders" / "qwen_3_4b_fp8_mixed.safetensors", "pt", device=DEVICE) as f:
+    with safe_open(models / "text_encoders" / "qwen_3_4b_fp8_mixed.safetensors", "pt", device="cpu") as f:
         names = set(f.keys())
         for name in names:
             if not name.endswith(".weight"):
@@ -76,11 +77,11 @@ def load_text_encoder(torch, models: Path):
         num_key_value_heads=8, head_dim=128, rms_norm_eps=1e-6, rope_theta=1000000.0, max_position_embeddings=40960,
         tie_word_embeddings=True,
     )
-    with torch.device(DEVICE):
+    with torch.device(DEVICE):  # setting it up here is far quicker than in system memory
         model = Qwen3ForCausalLM(config).to(torch.bfloat16)
     model.load_state_dict(plain, strict=False)
     model.tie_weights()
-    return model.eval()
+    return model.to("cpu").eval()
 
 
 def load_tokenizer():
@@ -123,11 +124,19 @@ def load_pipeline(torch, models: Path):
         num_train_timesteps=1000, shift=3.0, use_dynamic_shifting=True, base_shift=0.5, max_shift=1.15,
         base_image_seq_len=256, max_image_seq_len=4096, time_shift_type="exponential",
     )
+    started = time.perf_counter()
     transformer = load_transformer(torch, models)  # the biggest file goes first, while the most memory is free
+    gc.collect()
+    torch.cuda.empty_cache()  # the load used twice the model's size for a moment, so hand that back
+    print(f"main model {time.perf_counter() - started:.1f} s", flush=True)
+    vae = load_vae(torch, models)
+    print(f"vae {time.perf_counter() - started:.1f} s", flush=True)
+    text_encoder = load_text_encoder(torch, models)
+    torch.cuda.empty_cache()
+    print(f"word reader {time.perf_counter() - started:.1f} s", flush=True)
     return Flux2KleinPipeline(
-        scheduler=scheduler, vae=load_vae(torch, models), text_encoder=load_text_encoder(torch, models),
-        tokenizer=load_tokenizer(), transformer=transformer, is_distilled=True,
-    )
+        scheduler=scheduler, vae=vae, text_encoder=None, tokenizer=load_tokenizer(), transformer=transformer, is_distilled=True,
+    ), text_encoder
 
 
 def render_size(width: int, height: int) -> tuple:
@@ -136,10 +145,13 @@ def render_size(width: int, height: int) -> tuple:
 
 
 def main() -> None:
+    started = time.perf_counter()
+    import diffusers  # noqa: F401  (imported here so its start-up time shows in the log)
     import torch
     from PIL import Image
 
-    pipe = load_pipeline(torch, Path(sys.argv[1]))
+    print(f"libraries {time.perf_counter() - started:.1f} s", flush=True)
+    pipe, text_encoder = load_pipeline(torch, Path(sys.argv[1]))
     prompts = {}
     references = {}
 
@@ -147,8 +159,13 @@ def main() -> None:
         if text not in prompts:
             if len(prompts) >= KEEP_PROMPTS:
                 prompts.clear()
+            # It only visits the graphics card to read new words, which leaves 8 GB free the rest of the time.
+            pipe.text_encoder = text_encoder.to(DEVICE)
             with torch.no_grad():
                 prompts[text] = pipe.encode_prompt(prompt=text, device=DEVICE, num_images_per_prompt=1)[0]
+            text_encoder.to("cpu")
+            pipe.text_encoder = None
+            torch.cuda.empty_cache()
         return prompts[text]
 
     def reference_image(path: str):

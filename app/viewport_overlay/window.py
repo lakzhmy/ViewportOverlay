@@ -49,6 +49,7 @@ GRIP = 6
 CORNER = 14
 NOTICE_MS = 3000
 PROBLEM_MS = 8000
+KEEP_LOADED_MS = 10 * 60 * 1000  # how long an AI model waits for a new region
 WAIT_FOREVER_MS = 600000  # until the final arrives, fails or is cancelled
 MARGIN = 18
 STRIP = 30
@@ -114,6 +115,11 @@ class MainWindow(QMainWindow):
         self._final = None
         self._final_started = 0
         self._holding = False
+        self._parked = False  # no region, with the model kept loaded for the next one
+        self._unload_timer = QTimer(self)
+        self._unload_timer.setSingleShot(True)
+        self._unload_timer.setInterval(KEEP_LOADED_MS)
+        self._unload_timer.timeout.connect(self._unload)
         self._fal_key = load_key()
         self._final_clock = QTimer(self)
         self._final_clock.setInterval(1000)
@@ -185,6 +191,10 @@ class MainWindow(QMainWindow):
             "Off: it can be shared, but keep it clear of the region or it will render itself."
         )
         self.hide_capture.toggled.connect(self._set_capture_hidden)
+        self.pause_button = LineButton("Pause")
+        self.pause_button.setEnabled(False)
+        self.pause_button.setToolTip("Hold this image and stop rendering. The model stays loaded, so it carries on at once.")
+        self.pause_button.toggled.connect(self._pause_toggled)
 
         self.to_clipboard = LineButton("clipboard")
         self.to_clipboard.setChecked(self.capture_settings["to_clipboard"])
@@ -211,6 +221,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(footer)
         row.setContentsMargins(2, 0, 2, 0)
         row.setSpacing(16)
+        row.addWidget(self.pause_button)
         row.addWidget(self.on_top)
         row.addWidget(self.hide_capture)
         row.addLayout(save)
@@ -433,8 +444,7 @@ class MainWindow(QMainWindow):
         """Shows the final and holds it there. It paid for itself, so it's saved straight away."""
         self._end_final()
         self._holding = self.region_frame.area().isValid()
-        if self.worker and self._holding:
-            self.worker.set_paused(True)
+        self._apply_pause()
         self.preview.show_image(image)
         self.preview.set_live(False)
         self.region_frame.set_live(False)
@@ -447,10 +457,30 @@ class MainWindow(QMainWindow):
     def _leave_final(self):
         self._holding = False
         if self.worker:
-            self.worker.set_paused(False)
+            self._apply_pause()
         elif self.region_frame.area().isValid():
             self.start()
         self._refresh_final()
+
+    def _quiet(self) -> bool:
+        return self._holding or self._parked or self.pause_button.isChecked()
+
+    def _apply_pause(self):
+        if self.worker:
+            self.worker.set_paused(self._quiet())
+
+    def _pause_toggled(self, paused: bool):
+        self._apply_pause()
+        if paused:
+            self.preview.set_live(False)
+            self.region_frame.set_live(False)
+            self._say("Paused")
+        elif not self._holding and self.region_frame.area().isValid():
+            self._say("Carrying on")
+
+    def _unload(self):
+        self.stop()
+        self._say("Nothing selected yet")
 
     def _show_folder(self):
         folder = self.capture_settings["folder"]
@@ -536,6 +566,10 @@ class MainWindow(QMainWindow):
         self.region_frame.set_area(area)
         self._picking_ended()
         self.logo.set_on(True)
+        self._parked = False
+        self._unload_timer.stop()
+        self.pause_button.setEnabled(True)
+        self.pause_button.setChecked(False)
         if self.worker:
             self.worker.set_region(to_physical(area))
         else:
@@ -543,8 +577,21 @@ class MainWindow(QMainWindow):
         self._leave_final()
 
     def clear_region(self):
-        """Stops rendering and drops the region. The last render stays up, so it can still be captured."""
-        self.stop()
+        """Drops the region. The last render stays up, so it can still be captured.
+
+        A slow AI model stays loaded for a while, so selecting a new region starts at once.
+        """
+        self._holding = False
+        self.pause_button.setChecked(False)
+        self.pause_button.setEnabled(False)
+        if self.worker and self.worker.keeps_loaded():
+            self._parked = True
+            self._apply_pause()
+            self._unload_timer.start()
+            self.preview.set_live(False)
+            self.region_frame.set_live(False)
+        else:
+            self.stop()
         self.region_frame.clear()
         self.logo.set_on(False)
         self.preview.show_start()
@@ -573,6 +620,8 @@ class MainWindow(QMainWindow):
         if self.region_frame.area().isValid():
             self.stop()
             self.start()
+        elif self._parked:
+            self._unload()  # the waiting model no longer matches the look
 
     def _set_on_top(self, on_top: bool):
         set_always_on_top(self, on_top)
@@ -590,27 +639,33 @@ class MainWindow(QMainWindow):
         self.worker.idle.connect(self._show_idle)
         self.worker.failed.connect(self._show_failure)
         self.worker.loading.connect(self._show_loading)
-        self.worker.set_paused(self._holding)
+        self.worker.waiting.connect(self._show_waiting)
+        self._apply_pause()
         self.worker.start()
 
     def stop(self):
+        self._parked = False
+        self._unload_timer.stop()
         worker, self.worker = self.worker, None
         if worker:
             worker.frame_ready.disconnect(self._show_frame)
             worker.idle.disconnect(self._show_idle)
             worker.failed.disconnect(self._show_failure)
             worker.loading.disconnect(self._show_loading)
+            worker.waiting.disconnect(self._show_waiting)
             worker.stop()
         self._say("Stopped")
         self.preview.set_live(False)
         self.region_frame.set_live(False)
 
     def _show_loading(self, message: str):
+        if self._parked:
+            return
         self._say(message)
         self.preview.set_waiting(message)
 
     def _show_frame(self, image: QImage, fps: float):
-        if self._holding:  # a frame that was already on its way when the final arrived
+        if self._quiet():  # a frame that was already on its way
             return
         self.preview.show_image(image)
         self._refresh_capture()
@@ -620,8 +675,12 @@ class MainWindow(QMainWindow):
             self._rate = f"{fps:.0f} fps · "
         self._say(f"Live · {self._rate}{image.width()} × {image.height()}")
 
+    def _show_waiting(self):
+        if not self._quiet():
+            self._say("Renders when you stop moving")
+
     def _show_idle(self):
-        if self._holding:
+        if self._quiet():
             return
         self.preview.set_live(False)
         self.region_frame.set_live(False)

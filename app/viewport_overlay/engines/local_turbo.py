@@ -35,6 +35,7 @@ class LocalTurboEngine(Engine):
     label = "Local"
     folder = AI_FOLDER
     server_arguments = ()
+    slow_to_load = True
 
     def __init__(self):
         self._process = None

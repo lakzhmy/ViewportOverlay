@@ -10,6 +10,7 @@ from PySide6.QtGui import QImage
 from .engines import Engine, RenderParams
 
 TARGET_FPS = 30
+SETTLE_CHECKS_PER_SECOND = 10
 CHANGE_THRESHOLD = 0.4  # average brightness change, out of 255
 
 
@@ -31,6 +32,7 @@ class RenderWorker(QThread):
     idle = Signal()
     failed = Signal(str)
     loading = Signal(str)
+    waiting = Signal()
 
     def __init__(self, engine: Engine, region: dict, params: RenderParams):
         super().__init__()
@@ -41,6 +43,9 @@ class RenderWorker(QThread):
         self._lock = threading.Lock()
         self._running = True
         self._paused = False
+
+    def keeps_loaded(self) -> bool:
+        return self._engine.slow_to_load
 
     def set_paused(self, paused: bool) -> None:
         """Holds rendering with the model still loaded, so going back to live is instant."""
@@ -65,8 +70,14 @@ class RenderWorker(QThread):
 
     def run(self) -> None:
         previous = None
+        seen = None
+        pending = False
+        last_moved = 0.0
         last_done = None
         was_idle = False
+        was_waiting = False
+        settle = self._engine.settle_seconds
+        interval = 1.0 / (SETTLE_CHECKS_PER_SECOND if settle else TARGET_FPS)
         try:
             self.loading.emit(f"Loading {self._engine.name}…")
             self._engine.start()
@@ -87,7 +98,14 @@ class RenderWorker(QThread):
                     bgra = np.frombuffer(shot.bgra, np.uint8).reshape(shot.height, shot.width, 4)
                     frame = np.ascontiguousarray(bgra[:, :, 2::-1])
 
-                    if dirty or has_changed(previous, frame):
+                    if dirty or has_changed(seen, frame):
+                        last_moved = time.perf_counter()
+                    seen = frame
+                    pending = pending or dirty or has_changed(previous, frame)
+
+                    if pending and time.perf_counter() - last_moved >= settle:
+                        pending = False
+                        was_waiting = False
                         previous = frame
                         image = to_qimage(self._engine.render(frame, params))
                         now = time.perf_counter()
@@ -95,11 +113,15 @@ class RenderWorker(QThread):
                         last_done = now
                         was_idle = False
                         self.frame_ready.emit(image, fps)
+                    elif pending:
+                        if not was_waiting:
+                            was_waiting = True
+                            self.waiting.emit()
                     elif not was_idle:
                         was_idle = True
                         self.idle.emit()
 
-                    spare = 1.0 / TARGET_FPS - (time.perf_counter() - started)
+                    spare = interval - (time.perf_counter() - started)
                     if spare > 0:
                         time.sleep(spare)
         except Exception as error:  # shown in the window, so a failure is never silent

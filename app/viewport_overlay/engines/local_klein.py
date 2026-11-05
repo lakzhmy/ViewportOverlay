@@ -28,6 +28,7 @@ class LocalKleinEngine(LocalTurboEngine):
     label = "Klein"
     folder = AI_FOLDER
     server_arguments = (str(MODELS),)
+    settle_seconds = 0.5  # the graphics card stays free for your CAD program while the view moves
 
     def _request(self, width: int, height: int, params: RenderParams) -> bytes:
         return json.dumps({

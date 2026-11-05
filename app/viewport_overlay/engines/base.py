@@ -15,6 +15,8 @@ class RenderParams:
 class Engine:
     name = "Engine"
     uses_prompt = True
+    slow_to_load = False  # kept loaded for a while after a region closes, so the next one starts at once
+    settle_seconds = 0.0  # above zero, the engine only renders once the screen has been still this long
 
     def start(self) -> None:
         """Load models or open connections. Runs on the worker thread."""
